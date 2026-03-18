@@ -1,0 +1,11 @@
+# Louter Configuration
+# Copy to louter.toml and edit (or just start without it for defaults)
+
+[server]
+host = "127.0.0.1"
+port = 6188
+
+[database]
+path = "louter.db"
+
+# Providers and API keys are configured through the Web UI at http://localhost:6188
