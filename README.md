@@ -1,93 +1,122 @@
 <p align="center">
   <h1 align="center">Louter</h1>
-  <p align="center">One endpoint. Every LLM.</p>
+  <p align="center">Local LLM gateway for your AI agents.</p>
 </p>
 
 <p align="center">
+  <a href="#install">Install</a> &bull;
+  <a href="#agent-setup">Agent Setup</a> &bull;
   <a href="#features">Features</a> &bull;
-  <a href="#quick-start">Quick Start</a> &bull;
-  <a href="#usage">Usage</a> &bull;
   <a href="#routing">Routing</a> &bull;
-  <a href="#architecture">Architecture</a> &bull;
   <a href="#%E4%B8%AD%E6%96%87%E8%AF%B4%E6%98%8E">中文说明</a>
 </p>
 
 ---
 
-Louter is a lightweight, self-hosted LLM API gateway that unifies OpenAI, Anthropic, Azure, DeepSeek, Ollama, and any OpenAI-compatible provider behind a single OpenAI-compatible endpoint. One binary, zero external dependencies, built-in Web UI.
+Run one local gateway, connect every agent to every LLM.
 
 ```
-Your App (OpenAI SDK)  ──→  Louter (:6188)  ──→  OpenAI
-                                              ──→  Anthropic
-                                              ──→  Azure OpenAI
-                                              ──→  DeepSeek
-                                              ──→  Ollama
-                                              ──→  Qwen / Groq / Together / ...
+  Claude Code ──┐
+    OpenClaw ───┤                      ┌── OpenAI
+       Cline ───┼──→  Louter (:6188)  ─┼── Anthropic
+       aider ───┤     localhost        ├── DeepSeek
+    your app ───┘                      ├── Ollama (local)
+                                       └── Qwen / Groq / Azure / ...
 ```
 
-## Why Louter?
+Louter is a single-binary LLM API gateway that runs on your machine. It gives all your local agents — Claude Code, OpenClaw, Cline, aider, or any tool that speaks the OpenAI protocol — a single `localhost` endpoint that routes to any LLM provider.
 
-| Pain point | How Louter solves it |
-|---|---|
-| Switching providers means changing SDK code | Point all apps at Louter; swap providers in the Web UI |
-| Each provider has its own auth, format, and quirks | Louter speaks OpenAI format — it converts to Anthropic, Azure, etc. under the hood |
-| Managing keys across teams and services | Issue `lot_*` keys with per-key routing rules and usage tracking |
-| Adding a new provider means config files and restarts | Add providers in the Web UI at runtime — or let an LLM auto-configure it from docs |
-| Observability requires external tooling | Built-in usage analytics: tokens, latency, per-model breakdown |
-| Gateway tools require Docker, Redis, Postgres, etc. | Louter is a single binary with embedded SQLite and Web UI |
+**No Docker. No Redis. No Postgres.** Just one binary with embedded SQLite and a Web UI.
 
-## Features
+## Install
 
-- **Unified OpenAI-compatible API** — `/v1/chat/completions`, `/v1/models`, images, embeddings, audio — all work with standard OpenAI SDKs
-- **Native provider support** — OpenAI, Anthropic (full format conversion including tool use), Azure OpenAI, DeepSeek, Ollama
-- **Any OpenAI-compatible API** — Qwen, Groq, Together AI, Fireworks, vLLM, LM Studio — just add a base URL
-- **Smart routing** — Auto-routes `claude-*` → Anthropic, `gpt-*` → OpenAI, etc. Custom glob rules with priorities per key
-- **Streaming** — Full SSE streaming support with proper token counting across all providers
-- **Auto-configure** — Paste an API doc URL, Louter uses an existing LLM to extract the config automatically
-- **Built-in Web UI** — Dark-themed admin dashboard for providers, keys, routing rules, and usage analytics
-- **Single binary** — Rust + embedded SQLite + embedded React frontend. No Docker, no external services
-- **Runtime reconfiguration** — Add, update, disable providers without restart
-
-## Quick Start
-
-### Build from source
+**One-line install** (requires Rust and Node.js):
 
 ```bash
-# Build frontend
+curl -fsSL https://raw.githubusercontent.com/Drlucaslu/louter/main/install.sh | bash
+```
+
+**Or build manually:**
+
+```bash
+git clone https://github.com/Drlucaslu/louter.git && cd louter
 cd web && npm install && npm run build && cd ..
-
-# Build backend (embeds frontend into binary)
 cargo build --release
-
-# Run
 ./target/release/louter
 ```
 
-Open **http://localhost:6188** — the Web UI guides you through setup.
+Then open **http://localhost:6188** — add your providers and create an API key (`lot_xxxx`).
 
-### Configure
+## Agent Setup
 
-Louter works with zero config (defaults to `localhost:6188` + `louter.db`). To customize:
+Once Louter is running and you've added providers via the Web UI, configure your agents:
+
+### Claude Code
 
 ```bash
-cp louter.example.toml louter.toml
-# Edit host, port, database path
-./target/release/louter louter.toml
+# Set environment variables before launching Claude Code
+export OPENAI_API_BASE=http://localhost:6188/v1
+export OPENAI_API_KEY=lot_your_key_here
+
+# Now Claude Code can use any model through Louter
+claude --model gpt-4o          # → routes to OpenAI
+claude --model deepseek-chat   # → routes to DeepSeek
 ```
 
-## Usage
+Or add to your shell profile (`~/.zshrc` / `~/.bashrc`) to make it permanent:
 
-### 1. Add providers in the Web UI
+```bash
+echo 'export OPENAI_API_BASE=http://localhost:6188/v1' >> ~/.zshrc
+echo 'export OPENAI_API_KEY=lot_your_key_here' >> ~/.zshrc
+```
 
-Go to **Providers** → **Add Provider**, pick a preset (OpenAI, Anthropic, etc.) or add any OpenAI-compatible API.
+### OpenClaw
 
-### 2. Create an API key
+In your OpenClaw configuration, set the API base URL:
 
-Go to **Keys** → **Create Key**. Keys use the format `lot_xxxx`.
+```yaml
+# OpenClaw config
+api_base: http://localhost:6188/v1
+api_key: lot_your_key_here
+```
 
-### 3. Point your app at Louter
+OpenClaw will route all model requests through Louter automatically.
 
-**Python (OpenAI SDK)**
+### Cline (VS Code)
+
+1. Open Cline settings in VS Code
+2. Set **API Provider** to "OpenAI Compatible"
+3. Set **Base URL** to `http://localhost:6188/v1`
+4. Set **API Key** to your `lot_xxxx` key
+5. Use any model name — Louter routes it to the right provider
+
+### aider
+
+```bash
+aider --openai-api-base http://localhost:6188/v1 \
+      --openai-api-key lot_your_key_here \
+      --model gpt-4o
+```
+
+Or via environment variables:
+
+```bash
+export OPENAI_API_BASE=http://localhost:6188/v1
+export OPENAI_API_KEY=lot_your_key_here
+aider --model deepseek-chat
+```
+
+### Any OpenAI-compatible agent
+
+Any tool that accepts `OPENAI_API_BASE` and `OPENAI_API_KEY` works out of the box:
+
+```bash
+export OPENAI_API_BASE=http://localhost:6188/v1
+export OPENAI_API_KEY=lot_your_key_here
+# Now run your agent — it will use Louter as the gateway
+```
+
+**Python:**
 
 ```python
 from openai import OpenAI
@@ -97,14 +126,13 @@ client = OpenAI(
     api_key="lot_your_key_here",
 )
 
-# Auto-routes to the right provider
 response = client.chat.completions.create(
-    model="claude-sonnet-4-20250514",
+    model="claude-sonnet-4-20250514",  # routes to Anthropic
     messages=[{"role": "user", "content": "Hello!"}],
 )
 ```
 
-**Node.js (OpenAI SDK)**
+**Node.js:**
 
 ```javascript
 import OpenAI from "openai";
@@ -115,102 +143,92 @@ const client = new OpenAI({
 });
 
 const response = await client.chat.completions.create({
-  model: "gpt-4o",
+  model: "gpt-4o",  // routes to OpenAI
   messages: [{ role: "user", content: "Hello!" }],
 });
 ```
 
-**curl**
+## Why Louter?
 
-```bash
-curl http://localhost:6188/v1/chat/completions \
-  -H "Authorization: Bearer lot_your_key_here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "deepseek-chat",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": true
-  }'
-```
+| Problem | Solution |
+|---|---|
+| Each agent needs its own API keys and provider config | One gateway, one key — all agents share it |
+| Switching LLM providers means reconfiguring every agent | Swap providers in the Web UI; agents don't change |
+| Anthropic, Azure, etc. have different APIs | Louter converts everything to/from OpenAI format |
+| Want to use local models (Ollama) alongside cloud APIs | Same endpoint for both — route by model name |
+| Gateway tools need Docker + Redis + Postgres | Louter is a single binary, zero dependencies |
+| Adding a new provider means editing config and restarting | Add providers at runtime via Web UI, or auto-configure from docs |
 
-**Environment variables** — works with any app that uses the OpenAI SDK:
+## Features
 
-```bash
-export OPENAI_API_BASE=http://localhost:6188/v1
-export OPENAI_API_KEY=lot_your_key_here
-```
+- **One endpoint for all providers** — OpenAI, Anthropic, Azure, DeepSeek, Ollama, and any OpenAI-compatible API (Qwen, Groq, Together, Fireworks, vLLM, LM Studio)
+- **Smart routing** — `claude-*` → Anthropic, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek, etc. Custom glob rules with priorities per key
+- **Full API coverage** — Chat completions, streaming, models, images, embeddings, audio — all OpenAI-compatible endpoints
+- **Native format conversion** — Anthropic tool use, Azure deployment URLs, provider-specific auth — handled transparently
+- **Built-in Web UI** — Manage providers, keys, routing rules, and view usage analytics
+- **Auto-configure** — Paste an API doc URL, an existing LLM analyzes it and fills in the config
+- **Single binary** — Rust + embedded SQLite + embedded React UI. No external services needed
+- **Runtime reconfiguration** — Add, update, or disable providers without restarting
 
 ## Routing
 
-Louter resolves which provider handles a request using a three-tier system:
+Three-tier routing — no configuration needed for common providers:
 
-### 1. Per-key routing rules (highest priority)
+| Model name | Routes to | How |
+|---|---|---|
+| `claude-*` | Anthropic | Built-in prefix match |
+| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI | Built-in prefix match |
+| `deepseek-*` | DeepSeek | Built-in prefix match |
+| `llama*`, `mistral*`, `gemma*` | Ollama | Built-in prefix match |
+| `qwen-*` | Qwen (custom) | Provider name match |
 
-Custom glob rules configured in the Web UI per API key:
+Override with per-key rules in the Web UI:
 
 | Pattern | Provider | Priority |
 |---|---|---|
 | `gpt-4o*` | Azure OpenAI | 10 |
 | `gpt-*` | OpenAI | 1 |
-| `claude-*` | Anthropic | 1 |
+| `*` | DeepSeek | 0 |
 
-### 2. Auto-routing by model prefix
-
-Built-in mappings — no configuration needed:
-
-| Model prefix | Routes to |
-|---|---|
-| `claude-*` | Anthropic |
-| `gpt-*`, `o1-*`, `o3-*`, `o4-*`, `dall-e-*` | OpenAI |
-| `deepseek-*` | DeepSeek |
-| `llama*`, `mistral*`, `gemma*`, `phi*` | Ollama |
-| `{provider-name}-*` | Custom provider by name match |
-
-### 3. Default provider (fallback)
-
-Each API key can have a default provider for unmatched models.
-
-## Supported Endpoints
+## Endpoints
 
 | Endpoint | Description |
 |---|---|
 | `POST /v1/chat/completions` | Chat (streaming + non-streaming) |
-| `GET /v1/models` | List models from all providers |
+| `GET /v1/models` | List all models from all providers |
 | `POST /v1/images/generations` | Text-to-image |
-| `POST /v1/images/edits` | Image editing |
 | `POST /v1/embeddings` | Text embeddings |
 | `POST /v1/audio/speech` | Text-to-speech |
 | `POST /v1/audio/transcriptions` | Speech-to-text |
-| `POST /v1/audio/translations` | Speech translation |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│              Louter Binary              │
-│                                         │
-│  ┌──────────┐  ┌─────────────────────┐  │
-│  │ Web UI   │  │  OpenAI-Compatible  │  │
-│  │ (React)  │  │    API Gateway      │  │
-│  └──────────┘  └────────┬────────────┘  │
-│                         │               │
-│              ┌──────────▼──────────┐    │
-│              │   Router Engine     │    │
-│              │  (rules → prefix    │    │
-│              │   → default)        │    │
-│              └──────────┬──────────┘    │
-│                         │               │
-│  ┌──────────┐  ┌───────▼───────────┐   │
-│  │ SQLite   │  │ Provider Registry │   │
-│  │ (keys,   │  │                   │   │
-│  │  rules,  │  │ OpenAI  Anthropic │   │
-│  │  usage)  │  │ Azure   DeepSeek  │   │
-│  └──────────┘  │ Ollama  Custom... │   │
-│                └───────────────────┘   │
-└─────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│               Louter (single binary)        │
+│                                             │
+│  ┌──────────┐  ┌────────────────────────┐   │
+│  │  Web UI  │  │  /v1/* API Gateway     │   │
+│  │  :6188   │  │  (OpenAI-compatible)   │   │
+│  └──────────┘  └───────────┬────────────┘   │
+│                            │                │
+│                 ┌──────────▼──────────┐      │
+│                 │   Router Engine     │      │
+│                 │ rules → prefix →    │      │
+│                 │ default provider    │      │
+│                 └──────────┬──────────┘      │
+│                            │                │
+│  ┌──────────┐   ┌─────────▼────────────┐    │
+│  │  SQLite  │   │  Provider Registry   │    │
+│  │  (keys,  │   │                      │    │
+│  │  rules,  │   │ OpenAI   Anthropic   │    │
+│  │  usage)  │   │ Azure    DeepSeek    │    │
+│  └──────────┘   │ Ollama   Custom...   │    │
+│                 └──────────────────────┘    │
+└─────────────────────────────────────────────┘
 ```
 
-**Tech stack**: Rust (Axum + Tokio) / SQLite (sqlx) / React 19 + Tailwind CSS (Vite) / Single binary via `rust-embed`
+**Tech stack:** Rust (Axum + Tokio) / SQLite / React + Tailwind / single binary via `rust-embed`
 
 ## License
 
@@ -220,89 +238,136 @@ MIT
 
 # 中文说明
 
-## Louter — 一个端点，所有大模型
+## Louter — 本地 Agent 的 LLM 统一网关
 
-Louter 是一个轻量级、可自部署的大模型 API 网关。它将 OpenAI、Anthropic、Azure、DeepSeek、Ollama 以及任何 OpenAI 兼容的服务统一到一个 OpenAI 兼容的端点之后。单一二进制文件，零外部依赖，内置 Web 管理界面。
+在本地运行一个网关，让你所有的 AI Agent 连接所有大模型。
 
-## 为什么选择 Louter？
+```
+  Claude Code ──┐
+    OpenClaw ───┤                      ┌── OpenAI
+       Cline ───┼──→  Louter (:6188)  ─┼── Anthropic
+       aider ───┤     localhost        ├── DeepSeek
+      你的应用 ──┘                      ├── Ollama（本地）
+                                       └── 通义千问 / Groq / Azure / ...
+```
 
-| 痛点 | Louter 的解决方案 |
-|---|---|
-| 切换供应商需要修改代码 | 所有应用指向 Louter，在 Web UI 中切换供应商即可 |
-| 每个供应商有不同的认证方式和格式 | Louter 统一使用 OpenAI 格式，自动转换为 Anthropic、Azure 等原生格式 |
-| 跨团队管理多个 API Key | 发放 `lot_*` 格式的 Key，支持按 Key 设置路由规则和用量追踪 |
-| 添加新供应商需要改配置、重启服务 | 在 Web UI 中实时添加，或让 LLM 通过文档自动配置 |
-| 可观测性依赖外部工具 | 内置用量分析：Token 数、延迟、按模型维度的统计 |
-| 网关工具依赖 Docker、Redis、Postgres 等 | Louter 是单一二进制文件，内嵌 SQLite 和 Web UI |
+Louter 是一个单一二进制的大模型 API 网关，运行在你的本地机器上。它为你所有的本地 Agent — Claude Code、OpenClaw、Cline、aider，或任何支持 OpenAI 协议的工具 — 提供一个统一的 `localhost` 端点，自动路由到任意大模型供应商。
 
-## 核心特性
+**无需 Docker。无需 Redis。无需 Postgres。** 只需一个二进制文件，内嵌 SQLite 和 Web 管理界面。
 
-- **统一的 OpenAI 兼容 API** — `/v1/chat/completions`、`/v1/models`、图像、嵌入、音频端点，全部兼容 OpenAI SDK
-- **原生供应商支持** — OpenAI、Anthropic（完整格式转换，包括工具调用）、Azure OpenAI、DeepSeek、Ollama
-- **支持任意 OpenAI 兼容 API** — 通义千问、Groq、Together AI、Fireworks、vLLM、LM Studio 等，只需填入 Base URL
-- **智能路由** — 自动将 `claude-*` 路由到 Anthropic、`gpt-*` 路由到 OpenAI 等；支持按 Key 配置自定义 Glob 规则和优先级
-- **流式响应** — 全面支持 SSE 流式传输，跨所有供应商正确统计 Token
-- **自动配置** — 粘贴 API 文档地址，Louter 利用已有的 LLM 自动提取配置
-- **内置 Web UI** — 暗色主题的管理后台，管理供应商、Key、路由规则和用量分析
-- **单一二进制** — Rust + 内嵌 SQLite + 内嵌 React 前端，无需 Docker，无需外部服务
-- **运行时动态配置** — 添加、更新、禁用供应商无需重启
+## 安装
 
-## 快速开始
+**一键安装**（需要 Rust 和 Node.js）：
 
 ```bash
-# 构建前端
+curl -fsSL https://raw.githubusercontent.com/Drlucaslu/louter/main/install.sh | bash
+```
+
+**或手动构建：**
+
+```bash
+git clone https://github.com/Drlucaslu/louter.git && cd louter
 cd web && npm install && npm run build && cd ..
-
-# 构建后端（前端会嵌入到二进制中）
 cargo build --release
-
-# 运行
 ./target/release/louter
 ```
 
-打开 **http://localhost:6188**，Web UI 会引导你完成配置。
+打开 **http://localhost:6188**，在 Web UI 中添加供应商并创建 API Key（`lot_xxxx`）。
 
-## 使用方法
+## Agent 配置
 
-### 1. 在 Web UI 中添加供应商
+Louter 运行后，在 Web UI 中添加供应商并创建 Key，然后配置你的 Agent：
 
-进入 **Providers** → **Add Provider**，选择预设（OpenAI、Anthropic 等）或添加任意 OpenAI 兼容的 API。
+### Claude Code
 
-### 2. 创建 API Key
+```bash
+# 启动 Claude Code 前设置环境变量
+export OPENAI_API_BASE=http://localhost:6188/v1
+export OPENAI_API_KEY=lot_your_key_here
 
-进入 **Keys** → **Create Key**。Key 格式为 `lot_xxxx`。
-
-### 3. 将应用指向 Louter
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:6188/v1",
-    api_key="lot_your_key_here",
-)
-
-# 自动路由到正确的供应商
-response = client.chat.completions.create(
-    model="claude-sonnet-4-20250514",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
+# 现在 Claude Code 可以通过 Louter 使用任意模型
+claude --model gpt-4o          # → 路由到 OpenAI
+claude --model deepseek-chat   # → 路由到 DeepSeek
 ```
 
-或者设置环境变量，对所有使用 OpenAI SDK 的应用生效：
+写入 shell 配置文件使其永久生效：
+
+```bash
+echo 'export OPENAI_API_BASE=http://localhost:6188/v1' >> ~/.zshrc
+echo 'export OPENAI_API_KEY=lot_your_key_here' >> ~/.zshrc
+```
+
+### OpenClaw
+
+在 OpenClaw 配置中设置 API 地址：
+
+```yaml
+# OpenClaw 配置
+api_base: http://localhost:6188/v1
+api_key: lot_your_key_here
+```
+
+### Cline (VS Code)
+
+1. 打开 VS Code 中的 Cline 设置
+2. **API Provider** 选择 "OpenAI Compatible"
+3. **Base URL** 填入 `http://localhost:6188/v1`
+4. **API Key** 填入你的 `lot_xxxx` Key
+5. 使用任意模型名称 — Louter 自动路由到对应供应商
+
+### aider
 
 ```bash
 export OPENAI_API_BASE=http://localhost:6188/v1
 export OPENAI_API_KEY=lot_your_key_here
+aider --model deepseek-chat
 ```
+
+### 通用方式
+
+任何支持 `OPENAI_API_BASE` 环境变量的工具都可以直接使用：
+
+```bash
+export OPENAI_API_BASE=http://localhost:6188/v1
+export OPENAI_API_KEY=lot_your_key_here
+# 启动你的 Agent — 它将通过 Louter 访问所有大模型
+```
+
+## 为什么选择 Louter？
+
+| 痛点 | 解决方案 |
+|---|---|
+| 每个 Agent 都需要单独配置 API Key 和供应商 | 一个网关、一个 Key，所有 Agent 共享 |
+| 切换大模型供应商需要重新配置每个 Agent | 在 Web UI 中切换，Agent 无需任何改动 |
+| Anthropic、Azure 等各有不同的 API 格式 | Louter 统一转换为 OpenAI 兼容格式 |
+| 想同时使用本地模型（Ollama）和云端 API | 同一个端点，按模型名自动路由 |
+| 网关工具依赖 Docker + Redis + Postgres | 单一二进制文件，零外部依赖 |
+| 添加新供应商需要改配置、重启服务 | Web UI 实时添加，或通过文档自动配置 |
+
+## 核心特性
+
+- **一个端点接入所有供应商** — OpenAI、Anthropic、Azure、DeepSeek、Ollama，以及任意 OpenAI 兼容 API（通义千问、Groq、Together、Fireworks、vLLM、LM Studio）
+- **智能路由** — `claude-*` → Anthropic、`gpt-*` → OpenAI、`deepseek-*` → DeepSeek，支持自定义规则和优先级
+- **完整的 API 覆盖** — 聊天补全、流式响应、模型列表、图像、嵌入、音频 — 全部 OpenAI 兼容
+- **原生格式转换** — Anthropic 工具调用、Azure 部署 URL、供应商特定认证 — 透明处理
+- **内置 Web UI** — 管理供应商、Key、路由规则，查看用量分析
+- **自动配置** — 粘贴 API 文档地址，已有的 LLM 自动分析并填入配置
+- **单一二进制** — Rust + 内嵌 SQLite + 内嵌 React UI，无需任何外部服务
+- **运行时动态配置** — 添加、更新、禁用供应商无需重启
 
 ## 路由机制
 
-Louter 通过三级路由系统决定请求由哪个供应商处理：
+三级路由，常用供应商无需配置：
 
-1. **按 Key 的自定义规则**（最高优先级）— 在 Web UI 中为每个 Key 配置 Glob 模式匹配规则
-2. **按模型前缀自动路由** — 内置映射：`claude-*` → Anthropic，`gpt-*` → OpenAI 等
-3. **默认供应商**（兜底）— 每个 Key 可设置一个默认供应商
+| 模型名称 | 路由到 | 方式 |
+|---|---|---|
+| `claude-*` | Anthropic | 内置前缀匹配 |
+| `gpt-*`, `o1-*`, `o3-*`, `o4-*` | OpenAI | 内置前缀匹配 |
+| `deepseek-*` | DeepSeek | 内置前缀匹配 |
+| `llama*`, `mistral*`, `gemma*` | Ollama | 内置前缀匹配 |
+| `qwen-*` | 通义千问（自定义） | 供应商名称匹配 |
+
+可在 Web UI 中为每个 Key 设置自定义规则覆盖默认行为。
 
 ## 许可证
 
