@@ -12,6 +12,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::db;
 use crate::db::schema::UsageLogRow;
 use crate::error::AppError;
+use crate::router::smart_router;
 use crate::router::static_router::resolve_provider;
 use crate::types::chat::ChatCompletionRequest;
 use crate::AppState;
@@ -37,18 +38,41 @@ pub async fn chat_completions(
         .await?
         .ok_or_else(|| AppError::Unauthorized("Invalid API key".to_string()))?;
 
-    // Resolve provider
-    let provider = resolve_provider(
-        &state.registry,
-        &state.db,
-        &key.id,
-        key.default_provider_id.as_deref(),
-        &req.model,
-    )
-    .await?;
+    // Capture the original requested model before routing
+    let request_model = req.model.clone();
 
-    let model = req.model.clone();
+    // Resolve provider
+    let (provider, model) = if req.model == "auto" {
+        if let Some(ref sr_config) = state.config.smart_routing {
+            match smart_router::smart_route(sr_config, &state.registry, &req.messages).await {
+                Some((p, m)) => (p, m),
+                None => {
+                    return Err(AppError::NoRoute(
+                        "Smart routing: no matching provider found".into(),
+                    ));
+                }
+            }
+        } else {
+            return Err(AppError::BadRequest(
+                "Smart routing not configured. Add [smart_routing] to louter.toml".into(),
+            ));
+        }
+    } else {
+        let p = resolve_provider(
+            &state.registry,
+            &state.db,
+            &key.id,
+            key.default_provider_id.as_deref(),
+            &req.model,
+        )
+        .await?;
+        (p, req.model.clone())
+    };
+
+    let mut req = req;
+    req.model = model.clone();
     let key_id = key.id.clone();
+    let request_model = request_model.clone();
 
     if req.stream {
         // Streaming response
@@ -105,6 +129,7 @@ pub async fn chat_completions(
                     id: uuid::Uuid::new_v4().to_string(),
                     key_id: Some(key_id),
                     provider_id: None,
+                    request_model,
                     model_id: model,
                     prompt_tokens: pt,
                     completion_tokens: ct,
@@ -130,6 +155,7 @@ pub async fn chat_completions(
             id: uuid::Uuid::new_v4().to_string(),
             key_id: Some(key_id),
             provider_id: None,
+            request_model,
             model_id: model,
             prompt_tokens: usage.map(|u| u.prompt_tokens as i32).unwrap_or(0),
             completion_tokens: usage.map(|u| u.completion_tokens as i32).unwrap_or(0),

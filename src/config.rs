@@ -1,5 +1,7 @@
-use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
+
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
@@ -7,6 +9,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     #[serde(default)]
     pub database: DatabaseConfig,
+    pub smart_routing: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Deserialize)]

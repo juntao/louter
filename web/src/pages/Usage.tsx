@@ -4,6 +4,7 @@ interface UsageLog {
   id: string
   key_id: string | null
   provider_id: string | null
+  request_model: string
   model_id: string
   prompt_tokens: number
   completion_tokens: number
@@ -126,7 +127,8 @@ export default function Usage() {
             <thead>
               <tr className="border-b border-gray-800 text-left text-gray-500 text-xs">
                 <th className="py-2 px-3">Time</th>
-                <th className="py-2 px-3">Model</th>
+                <th className="py-2 px-3">Model In</th>
+                <th className="py-2 px-3">Model Out</th>
                 <th className="py-2 px-3">Prompt</th>
                 <th className="py-2 px-3">Completion</th>
                 <th className="py-2 px-3">Total</th>
@@ -138,6 +140,7 @@ export default function Usage() {
               {logs.map(log => (
                 <tr key={log.id} className="border-b border-gray-800/30 hover:bg-gray-800/30">
                   <td className="py-1.5 px-3 text-gray-500 text-xs">{new Date(log.created_at).toLocaleString()}</td>
+                  <td className="py-1.5 px-3"><code className="text-purple-400 text-xs">{log.request_model || log.model_id}</code></td>
                   <td className="py-1.5 px-3"><code className="text-blue-400 text-xs">{log.model_id}</code></td>
                   <td className="py-1.5 px-3 text-gray-400 text-xs">{log.prompt_tokens > 0 ? log.prompt_tokens.toLocaleString() : '-'}</td>
                   <td className="py-1.5 px-3 text-gray-400 text-xs">{log.completion_tokens > 0 ? log.completion_tokens.toLocaleString() : '-'}</td>
@@ -149,7 +152,7 @@ export default function Usage() {
                 </tr>
               ))}
               {logs.length === 0 && (
-                <tr><td colSpan={7} className="text-center text-gray-500 py-8">No usage logs yet.</td></tr>
+                <tr><td colSpan={8} className="text-center text-gray-500 py-8">No usage logs yet.</td></tr>
               )}
             </tbody>
           </table>

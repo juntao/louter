@@ -9,3 +9,12 @@ port = 6188
 path = "louter.db"
 
 # Providers and API keys are configured through the Web UI at http://localhost:6188
+
+# Smart routing: when model="auto", classify messages and route to different providers.
+# Format: category = "provider_name/model_name"
+# Categories: code, math, translation, general (fallback)
+# [smart_routing]
+# code = "anthropic/claude-sonnet-4-20250514"
+# math = "deepseek/deepseek-chat"
+# translation = "qwen/qwen-plus"
+# general = "qwen/qwen-plus"

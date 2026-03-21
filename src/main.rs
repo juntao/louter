@@ -52,6 +52,7 @@ async fn main() {
         AppConfig {
             server: Default::default(),
             database: Default::default(),
+            smart_routing: None,
         }
     };
 

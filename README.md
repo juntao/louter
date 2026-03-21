@@ -162,7 +162,7 @@ const response = await client.chat.completions.create({
 ## Features
 
 - **One endpoint for all providers** — OpenAI, Anthropic, Azure, DeepSeek, Ollama, and any OpenAI-compatible API (Qwen, Groq, Together, Fireworks, vLLM, LM Studio)
-- **Smart routing** — `claude-*` → Anthropic, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek, etc. Custom glob rules with priorities per key
+- **Smart routing** — `claude-*` → Anthropic, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek, etc. Custom glob rules with priorities per key. Use `model: "auto"` for content-based routing
 - **Full API coverage** — Chat completions, streaming, models, images, embeddings, audio — all OpenAI-compatible endpoints
 - **Native format conversion** — Anthropic tool use, Azure deployment URLs, provider-specific auth — handled transparently
 - **Built-in Web UI** — Manage providers, keys, routing rules, and view usage analytics
@@ -189,6 +189,41 @@ Override with per-key rules in the Web UI:
 | `gpt-4o*` | Azure OpenAI | 10 |
 | `gpt-*` | OpenAI | 1 |
 | `*` | DeepSeek | 0 |
+
+### Smart Routing (`model: "auto"`)
+
+Send `model: "auto"` and Louter automatically classifies your message and routes to the best provider. Pure keyword-based detection, zero latency, no LLM calls.
+
+**Categories** (checked in priority order):
+
+| Category | Detection | Examples |
+|---|---|---|
+| `code` | Code blocks (` ``` `), keywords (`function`, `def`, `class`, `import`, `bug`, `fix`, `debug`...) | "Help me write a Python function" |
+| `math` | Math symbols (`∑`, `∫`, `√`), LaTeX (`\frac`, `$...$`), keywords (`equation`, `theorem`, `计算`...) | "Solve this equation" |
+| `translation` | `translate`, `translation`, `翻译` | "Translate this to Chinese" |
+| `general` | Default fallback | "Tell me a joke" |
+
+**Configuration** — add to `louter.toml`:
+
+```toml
+[smart_routing]
+code = "anthropic/claude-sonnet-4-20250514"
+math = "deepseek/deepseek-chat"
+translation = "qwen/qwen-plus"
+general = "qwen/qwen-plus"
+```
+
+Format: `category = "provider_name/model_name"`. The provider name must match a provider you've added in the Web UI.
+
+**Usage:**
+
+```bash
+curl http://localhost:6188/v1/chat/completions \
+  -H "Authorization: Bearer lot_xxx" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"auto","messages":[{"role":"user","content":"Help me write a Python function"}]}'
+# → routes to anthropic/claude-sonnet-4-20250514 (code category)
+```
 
 ## Endpoints
 
@@ -347,7 +382,7 @@ export OPENAI_API_KEY=lot_your_key_here
 ## 核心特性
 
 - **一个端点接入所有供应商** — OpenAI、Anthropic、Azure、DeepSeek、Ollama，以及任意 OpenAI 兼容 API（通义千问、Groq、Together、Fireworks、vLLM、LM Studio）
-- **智能路由** — `claude-*` → Anthropic、`gpt-*` → OpenAI、`deepseek-*` → DeepSeek，支持自定义规则和优先级
+- **智能路由** — `claude-*` → Anthropic、`gpt-*` → OpenAI、`deepseek-*` → DeepSeek，支持自定义规则和优先级。使用 `model: "auto"` 按消息内容自动路由
 - **完整的 API 覆盖** — 聊天补全、流式响应、模型列表、图像、嵌入、音频 — 全部 OpenAI 兼容
 - **原生格式转换** — Anthropic 工具调用、Azure 部署 URL、供应商特定认证 — 透明处理
 - **内置 Web UI** — 管理供应商、Key、路由规则，查看用量分析
@@ -368,6 +403,31 @@ export OPENAI_API_KEY=lot_your_key_here
 | `qwen-*` | 通义千问（自定义） | 供应商名称匹配 |
 
 可在 Web UI 中为每个 Key 设置自定义规则覆盖默认行为。
+
+### 智能路由（`model: "auto"`）
+
+发送 `model: "auto"`，Louter 自动分析消息内容并路由到最合适的供应商。纯关键词检测，零延迟，不调用任何 LLM。
+
+**分类**（按优先级检测）：
+
+| 分类 | 检测方式 | 示例 |
+|---|---|---|
+| `code` | 代码块（` ``` `）、编程关键词（`function`、`def`、`class`、`import`、`bug`、`fix`、`debug`...） | "帮我写一个排序函数" |
+| `math` | 数学符号（`∑`、`∫`、`√`）、LaTeX（`\frac`、`$...$`）、关键词（`equation`、`计算`、`方程`...） | "解这个方程" |
+| `translation` | `translate`、`translation`、`翻译` | "翻译这段话" |
+| `general` | 默认分类 | "今天天气怎么样" |
+
+**配置** — 在 `louter.toml` 中添加：
+
+```toml
+[smart_routing]
+code = "anthropic/claude-sonnet-4-20250514"
+math = "deepseek/deepseek-chat"
+translation = "qwen/qwen-plus"
+general = "qwen/qwen-plus"
+```
+
+格式：`分类 = "供应商名称/模型名称"`。供应商名称需与 Web UI 中添加的供应商一致。
 
 ## 许可证
 

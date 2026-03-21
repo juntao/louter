@@ -48,6 +48,7 @@ pub struct UsageLogRow {
     pub id: String,
     pub key_id: Option<String>,
     pub provider_id: Option<String>,
+    pub request_model: String,
     pub model_id: String,
     pub prompt_tokens: i32,
     pub completion_tokens: i32,

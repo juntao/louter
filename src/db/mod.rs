@@ -16,6 +16,10 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, String> {
         .await
         .map_err(|e| format!("Failed to run migrations: {e}"))?;
 
+    // Run incremental migrations (ignore errors for already-applied columns)
+    let m002 = include_str!("../../migrations/002_add_request_model.sql");
+    let _ = sqlx::raw_sql(m002).execute(&pool).await;
+
     Ok(pool)
 }
 
@@ -201,11 +205,12 @@ pub async fn delete_routing_rule_by_key_and_pattern(
 
 pub async fn insert_usage_log(pool: &SqlitePool, row: &UsageLogRow) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO usage_logs (id, key_id, provider_id, model_id, prompt_tokens, completion_tokens, total_tokens, latency_ms, status_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO usage_logs (id, key_id, provider_id, request_model, model_id, prompt_tokens, completion_tokens, total_tokens, latency_ms, status_code, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&row.id)
     .bind(&row.key_id)
     .bind(&row.provider_id)
+    .bind(&row.request_model)
     .bind(&row.model_id)
     .bind(row.prompt_tokens)
     .bind(row.completion_tokens)

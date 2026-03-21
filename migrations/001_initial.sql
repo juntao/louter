@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     id TEXT PRIMARY KEY,
     key_id TEXT,
     provider_id TEXT,
+    request_model TEXT NOT NULL DEFAULT '',
     model_id TEXT NOT NULL,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
     completion_tokens INTEGER NOT NULL DEFAULT 0,
