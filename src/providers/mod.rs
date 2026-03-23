@@ -4,6 +4,7 @@ pub mod deepseek;
 pub mod ollama;
 pub mod openai;
 pub mod sse;
+pub mod tool_call_normalizer;
 
 use std::sync::Arc;
 

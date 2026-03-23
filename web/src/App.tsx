@@ -4,12 +4,14 @@ import Providers from './pages/Providers'
 import Keys from './pages/Keys'
 import Usage from './pages/Usage'
 import Setup from './pages/Setup'
+import Distill from './pages/Distill'
 
 const navItems = [
   { to: '/', label: 'Dashboard' },
   { to: '/providers', label: 'Providers' },
   { to: '/keys', label: 'Keys' },
   { to: '/usage', label: 'Usage' },
+  { to: '/distill', label: 'Distill' },
   { to: '/setup', label: 'Setup' },
 ]
 
@@ -46,6 +48,7 @@ function App() {
           <Route path="/providers" element={<Providers />} />
           <Route path="/keys" element={<Keys />} />
           <Route path="/usage" element={<Usage />} />
+          <Route path="/distill" element={<Distill />} />
           <Route path="/setup" element={<Setup />} />
         </Routes>
       </main>

@@ -20,6 +20,9 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, String> {
     let m002 = include_str!("../../migrations/002_add_request_model.sql");
     let _ = sqlx::raw_sql(m002).execute(&pool).await;
 
+    let m003 = include_str!("../../migrations/003_training_samples.sql");
+    let _ = sqlx::raw_sql(m003).execute(&pool).await;
+
     Ok(pool)
 }
 
@@ -233,6 +236,25 @@ pub async fn list_usage_logs(pool: &SqlitePool, limit: i32) -> AppResult<Vec<Usa
     Ok(rows)
 }
 
+pub async fn list_usage_logs_paged(pool: &SqlitePool, page: i32, page_size: i32) -> AppResult<Vec<UsageLogRow>> {
+    let offset = (page - 1) * page_size;
+    let rows = sqlx::query_as::<_, UsageLogRow>(
+        "SELECT * FROM usage_logs ORDER BY created_at DESC LIMIT ? OFFSET ?"
+    )
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn count_usage_logs(pool: &SqlitePool) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM usage_logs")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
+}
+
 /// Daily token usage aggregation
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct DailyUsage {
@@ -310,4 +332,176 @@ pub async fn upsert_model(pool: &SqlitePool, row: &ModelRow) -> AppResult<()> {
     .execute(pool)
     .await?;
     Ok(())
+}
+
+// ── Training Samples (Distillation) ──
+
+pub async fn insert_training_sample(pool: &SqlitePool, row: &TrainingSampleRow) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO training_samples (id, request_messages, request_tools, response_content, request_model, actual_model, provider_type, task_type, has_tool_calls, is_successful, source, prompt_tokens, completion_tokens, total_tokens, latency_ms, is_exported, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&row.id)
+    .bind(&row.request_messages)
+    .bind(&row.request_tools)
+    .bind(&row.response_content)
+    .bind(&row.request_model)
+    .bind(&row.actual_model)
+    .bind(&row.provider_type)
+    .bind(&row.task_type)
+    .bind(row.has_tool_calls)
+    .bind(row.is_successful)
+    .bind(&row.source)
+    .bind(row.prompt_tokens)
+    .bind(row.completion_tokens)
+    .bind(row.total_tokens)
+    .bind(row.latency_ms)
+    .bind(row.is_exported)
+    .bind(&row.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn list_training_samples_for_export(
+    pool: &SqlitePool,
+    task_type: Option<&str>,
+    limit: i32,
+) -> AppResult<Vec<TrainingSampleRow>> {
+    let rows = if let Some(tt) = task_type {
+        sqlx::query_as::<_, TrainingSampleRow>(
+            "SELECT * FROM training_samples WHERE is_successful = 1 AND is_exported = 0 AND task_type = ? ORDER BY created_at ASC LIMIT ?"
+        )
+        .bind(tt)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, TrainingSampleRow>(
+            "SELECT * FROM training_samples WHERE is_successful = 1 AND is_exported = 0 ORDER BY created_at ASC LIMIT ?"
+        )
+        .bind(limit)
+        .fetch_all(pool)
+        .await?
+    };
+    Ok(rows)
+}
+
+pub async fn mark_samples_exported(pool: &SqlitePool, ids: &[String]) -> AppResult<()> {
+    for id in ids {
+        sqlx::query("UPDATE training_samples SET is_exported = 1 WHERE id = ?")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn count_training_samples(pool: &SqlitePool) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM training_samples")
+        .fetch_one(pool)
+        .await?;
+    Ok(row.0)
+}
+
+pub async fn count_unexported_samples(pool: &SqlitePool) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM training_samples WHERE is_successful = 1 AND is_exported = 0",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Per-task-type sample counts
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct TaskTypeStat {
+    pub task_type: String,
+    pub total: i64,
+    pub successful: i64,
+    pub with_tool_calls: i64,
+}
+
+pub async fn get_training_sample_stats(pool: &SqlitePool) -> AppResult<Vec<TaskTypeStat>> {
+    let rows = sqlx::query_as::<_, TaskTypeStat>(
+        "SELECT task_type, \
+         COUNT(*) as total, \
+         SUM(CASE WHEN is_successful = 1 THEN 1 ELSE 0 END) as successful, \
+         SUM(CASE WHEN has_tool_calls = 1 THEN 1 ELSE 0 END) as with_tool_calls \
+         FROM training_samples \
+         GROUP BY task_type \
+         ORDER BY total DESC"
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+// ── Routing History ──
+
+pub async fn insert_routing_history(pool: &SqlitePool, row: &RoutingHistoryRow) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO routing_history (id, task_type, routed_to, was_successful, was_fallback, latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )
+    .bind(&row.id)
+    .bind(&row.task_type)
+    .bind(&row.routed_to)
+    .bind(row.was_successful)
+    .bind(row.was_fallback)
+    .bind(row.latency_ms)
+    .bind(&row.created_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Success rate for local routing by task type (last N days)
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct LocalSuccessRate {
+    pub task_type: String,
+    pub total: i64,
+    pub successful: i64,
+    pub success_rate: f64,
+}
+
+pub async fn get_local_success_rates(pool: &SqlitePool, days: i32) -> AppResult<Vec<LocalSuccessRate>> {
+    let rows = sqlx::query_as::<_, LocalSuccessRate>(
+        "SELECT task_type, \
+         COUNT(*) as total, \
+         SUM(CASE WHEN was_successful = 1 THEN 1 ELSE 0 END) as successful, \
+         CAST(SUM(CASE WHEN was_successful = 1 THEN 1 ELSE 0 END) AS REAL) / COUNT(*) as success_rate \
+         FROM routing_history \
+         WHERE routed_to = 'local' AND created_at >= datetime('now', '-' || ? || ' days') \
+         GROUP BY task_type"
+    )
+    .bind(days)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Overall routing stats
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct RoutingStats {
+    pub routed_to: String,
+    pub total: i64,
+    pub successful: i64,
+    pub fallbacks: i64,
+    pub avg_latency_ms: f64,
+}
+
+pub async fn get_routing_stats(pool: &SqlitePool, days: i32) -> AppResult<Vec<RoutingStats>> {
+    let rows = sqlx::query_as::<_, RoutingStats>(
+        "SELECT routed_to, \
+         COUNT(*) as total, \
+         SUM(CASE WHEN was_successful = 1 THEN 1 ELSE 0 END) as successful, \
+         SUM(CASE WHEN was_fallback = 1 THEN 1 ELSE 0 END) as fallbacks, \
+         COALESCE(AVG(latency_ms), 0) as avg_latency_ms \
+         FROM routing_history \
+         WHERE created_at >= datetime('now', '-' || ? || ' days') \
+         GROUP BY routed_to"
+    )
+    .bind(days)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
 }

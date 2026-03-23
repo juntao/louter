@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auto_configure;
 pub mod chat;
+pub mod distill;
 pub mod docs;
 pub mod models;
 pub mod proxy;

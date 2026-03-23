@@ -2,6 +2,7 @@ use async_trait::async_trait;
 
 use crate::error::{AppError, AppResult};
 use crate::providers::openai::OpenAIProvider;
+use crate::providers::tool_call_normalizer::normalize_response;
 use crate::providers::{ChunkStream, Provider};
 use crate::types::chat::{ChatCompletionRequest, ChatCompletionResponse};
 use crate::types::provider::ProviderType;
@@ -35,7 +36,10 @@ impl Provider for OllamaProvider {
     }
 
     async fn complete(&self, req: &ChatCompletionRequest) -> AppResult<ChatCompletionResponse> {
-        self.inner.complete(req).await
+        let response = self.inner.complete(req).await?;
+        // Normalize tool calls: local models may embed tool calls in text content
+        // instead of using proper OpenAI tool_calls format.
+        Ok(normalize_response(response))
     }
 
     async fn stream(&self, req: &ChatCompletionRequest) -> AppResult<ChunkStream> {

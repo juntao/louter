@@ -57,3 +57,37 @@ pub struct UsageLogRow {
     pub status_code: i32,
     pub created_at: String,
 }
+
+// ── Distillation: Training Samples ──
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TrainingSampleRow {
+    pub id: String,
+    pub request_messages: String,
+    pub request_tools: Option<String>,
+    pub response_content: String,
+    pub request_model: String,
+    pub actual_model: String,
+    pub provider_type: String,
+    pub task_type: String,
+    pub has_tool_calls: bool,
+    pub is_successful: bool,
+    pub source: String,
+    pub prompt_tokens: i32,
+    pub completion_tokens: i32,
+    pub total_tokens: i32,
+    pub latency_ms: i32,
+    pub is_exported: bool,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RoutingHistoryRow {
+    pub id: String,
+    pub task_type: String,
+    pub routed_to: String,
+    pub was_successful: bool,
+    pub was_fallback: bool,
+    pub latency_ms: i32,
+    pub created_at: String,
+}

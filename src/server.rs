@@ -30,7 +30,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/providers/:id", put(api::admin::update_provider))
         .route("/providers/:id", delete(api::admin::delete_provider))
         .route("/providers/:id/test", post(api::admin::test_provider))
-        .route("/providers/auto-configure", post(api::auto_configure::auto_configure))
+        .route(
+            "/providers/auto-configure",
+            post(api::auto_configure::auto_configure),
+        )
         .route("/keys", get(api::admin::list_keys))
         .route("/keys", post(api::admin::create_key))
         .route("/keys/:id", put(api::admin::update_key))
@@ -39,7 +42,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/rules", post(api::admin::create_routing_rule))
         .route("/rules/:id", delete(api::admin::delete_routing_rule))
         .route("/usage", get(api::admin::list_usage_logs))
-        .route("/usage/stats", get(api::admin::usage_stats));
+        .route("/usage/stats", get(api::admin::usage_stats))
+        // Distillation / Hybrid Inference endpoints
+        .route("/distill/stats", get(api::distill::distill_stats))
+        .route("/distill/routing", get(api::distill::routing_stats))
+        .route("/distill/export", post(api::distill::export_samples))
+        .route("/distill/config", get(api::distill::get_distill_config));
 
     Router::new()
         .nest("/v1", v1_routes)

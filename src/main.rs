@@ -3,6 +3,7 @@ mod config;
 #[allow(dead_code)]
 mod db;
 mod error;
+mod feedback;
 mod providers;
 mod router;
 mod server;
@@ -19,6 +20,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub registry: ProviderRegistry,
     pub config: AppConfig,
+    pub feedback: feedback::FeedbackTracker,
 }
 
 #[tokio::main]
@@ -53,6 +55,8 @@ async fn main() {
             server: Default::default(),
             database: Default::default(),
             smart_routing: None,
+            hybrid: Default::default(),
+            distillation: Default::default(),
         }
     };
 
@@ -102,6 +106,7 @@ async fn main() {
         db: pool,
         registry,
         config,
+        feedback: feedback::FeedbackTracker::new(),
     });
 
     let app = server::build_router(state);
