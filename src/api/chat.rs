@@ -195,7 +195,8 @@ async fn handle_hybrid_request(
                     let latency = start.elapsed().as_millis() as i32;
 
                     // Check if the response looks valid
-                    let is_valid = validate_response(&response);
+                    let has_tools_in_req = local_req.tools.as_ref().is_some_and(|t| !t.is_empty());
+                    let is_valid = validate_response(&response, has_tools_in_req);
 
                     if is_valid {
                         tracing::info!("Hybrid: local model succeeded");
@@ -260,7 +261,13 @@ async fn handle_hybrid_request(
 }
 
 /// Validate a non-streaming response looks reasonable.
-fn validate_response(response: &crate::types::chat::ChatCompletionResponse) -> bool {
+///
+/// Beyond just checking for content presence, validates that the response
+/// is substantive enough to be useful.
+fn validate_response(
+    response: &crate::types::chat::ChatCompletionResponse,
+    has_tools_in_request: bool,
+) -> bool {
     // Must have at least one choice
     if response.choices.is_empty() {
         return false;
@@ -268,27 +275,54 @@ fn validate_response(response: &crate::types::chat::ChatCompletionResponse) -> b
 
     let choice = &response.choices[0];
 
-    // Must have content or tool_calls
-    let has_content = choice
-        .message
-        .content
-        .as_ref()
-        .is_some_and(|c| !c.trim().is_empty());
+    // Check finish_reason
+    if let Some(ref reason) = choice.finish_reason {
+        if reason == "error" {
+            return false;
+        }
+    }
+
     let has_tool_calls = choice
         .message
         .tool_calls
         .as_ref()
         .is_some_and(|tc| !tc.is_empty());
 
-    if !has_content && !has_tool_calls {
-        return false;
-    }
-
-    // Check finish_reason is normal
-    if let Some(ref reason) = choice.finish_reason {
-        if reason == "error" {
+    // If request had tools but response has no tool_calls, check content quality
+    if has_tools_in_request && !has_tool_calls {
+        let content = choice
+            .message
+            .content
+            .as_ref()
+            .map(|c| c.trim())
+            .unwrap_or("");
+        // Local model should have called a tool but didn't — likely low quality
+        if content.len() < 20 {
             return false;
         }
+        // Check for common "I can't do this" patterns from local models
+        let refusal_patterns = [
+            "I cannot", "I can't", "I'm unable", "I don't have",
+            "sorry", "apologize", "as an ai",
+            "无法", "抱歉", "不能",
+        ];
+        let content_lower = content.to_lowercase();
+        for pattern in &refusal_patterns {
+            if content_lower.contains(pattern) {
+                return false;
+            }
+        }
+    }
+
+    // Must have content or tool_calls
+    let has_content = choice
+        .message
+        .content
+        .as_ref()
+        .is_some_and(|c| c.trim().len() >= 5);
+
+    if !has_content && !has_tool_calls {
+        return false;
     }
 
     true

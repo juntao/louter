@@ -130,8 +130,17 @@ pub async fn hybrid_route(
             }
         }
         _ => {
-            // Not enough data yet → use fallback mode if enabled, otherwise cloud
-            if config.fallback_enabled && !req.stream {
+            // Not enough data yet → cold start strategy:
+            // Alternate between local (with fallback) and cloud to collect
+            // both routing history AND training samples from cloud.
+            let current_count = rate_for_type.map(|r| r.total).unwrap_or(0);
+
+            // Use modulo to alternate: even counts → cloud, odd → local
+            // This ensures ~50% of requests go to cloud during cold start,
+            // collecting training data for distillation.
+            let try_local = current_count % 2 == 1;
+
+            if try_local && config.fallback_enabled && !req.stream {
                 Some(RoutingDecision::LocalWithFallback {
                     local_provider,
                     local_model: config.local_model.clone(),
@@ -145,8 +154,8 @@ pub async fn hybrid_route(
                     model: config.cloud_model.clone(),
                     task_type,
                     reason: format!(
-                        "insufficient data ({} samples, need {})",
-                        rate_for_type.map(|r| r.total).unwrap_or(0),
+                        "cold start: collecting data ({}/{} samples)",
+                        current_count,
                         config.min_samples
                     ),
                 })
