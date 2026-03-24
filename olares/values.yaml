@@ -1,0 +1,8 @@
+image:
+  repository: drlucaslu/louter
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+userspace:
+  appData: ""
+  appCache: ""

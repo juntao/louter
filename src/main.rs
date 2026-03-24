@@ -36,10 +36,11 @@ async fn main() {
         )
         .init();
 
-    // Load config
-    let config_path = std::env::args()
-        .nth(1)
+    // Load config — check env var first (for container deployments), then CLI arg, then default
+    let config_path = std::env::var("LOUTER_CONFIG")
         .map(PathBuf::from)
+        .ok()
+        .or_else(|| std::env::args().nth(1).map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("louter.toml"));
 
     let config = if config_path.exists() {
@@ -64,18 +65,24 @@ async fn main() {
         }
     };
 
+    // Apply environment variable overrides (for container deployments)
+    let server_host = std::env::var("LOUTER_HOST").unwrap_or(config.server.host.clone());
+    let server_port: u16 = std::env::var("LOUTER_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(config.server.port);
+    let db_path = std::env::var("LOUTER_DB_PATH").unwrap_or(config.database.path.clone());
+
     // Initialize database
-    let db_url = format!("sqlite:{}?mode=rwc", config.database.path);
+    let db_url = format!("sqlite:{}?mode=rwc", db_path);
     let pool = match db::init_db(&db_url).await {
-        Ok(p) => {
-            tracing::info!("Database initialized at {}", config.database.path);
-            p
-        }
+        Ok(p) => p,
         Err(e) => {
             tracing::error!("Failed to initialize database: {e}");
             std::process::exit(1);
         }
     };
+    tracing::info!("Database initialized at {}", db_path);
 
     // Load providers from database
     let registry = ProviderRegistry::new();
@@ -105,7 +112,7 @@ async fn main() {
         }
     }
 
-    let addr = format!("{}:{}", config.server.host, config.server.port);
+    let addr = format!("{}:{}", server_host, server_port);
     let state = Arc::new(AppState {
         db: pool,
         registry,

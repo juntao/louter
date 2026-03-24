@@ -1,0 +1,7 @@
+target/
+node_modules/
+web/node_modules/
+*.db
+*.log
+.git/
+olares/
