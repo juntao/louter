@@ -113,12 +113,19 @@ pub fn hash_last_user_message(messages: &[crate::types::chat::Message]) -> u64 {
         .map(|c| c.as_text())
         .unwrap_or_default();
 
-    // Use first 500 chars for hashing (avoid hashing huge contexts)
-    let text = if last_user.len() > 500 {
-        &last_user[..500]
+    // Use first ~500 chars for hashing (avoid hashing huge contexts).
+    // floor_char_boundary ensures we don't split a multi-byte UTF-8 character.
+    let end = if last_user.len() > 500 {
+        // Find the largest char boundary <= 500
+        let mut i = 500;
+        while i > 0 && !last_user.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
     } else {
-        &last_user
+        last_user.len()
     };
+    let text = &last_user[..end];
 
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
