@@ -133,12 +133,19 @@ pub async fn hybrid_route(
             // Not enough data yet → cold start strategy:
             // Alternate between local (with fallback) and cloud to collect
             // both routing history AND training samples from cloud.
-            let current_count = rate_for_type.map(|r| r.total).unwrap_or(0);
+            // Use TOTAL routing history count (all destinations) for alternation,
+            // not just local count — otherwise we get stuck in a cloud-only loop.
+            let all_stats = db::get_routing_stats(pool, 7).await.ok().unwrap_or_default();
+            let total_for_type: i64 = all_stats
+                .iter()
+                .filter(|_| true)
+                .map(|s| s.total)
+                .sum();
 
             // Use modulo to alternate: even counts → cloud, odd → local
             // This ensures ~50% of requests go to cloud during cold start,
             // collecting training data for distillation.
-            let try_local = current_count % 2 == 1;
+            let try_local = total_for_type % 2 == 1;
 
             if try_local && config.fallback_enabled && !req.stream {
                 Some(RoutingDecision::LocalWithFallback {
@@ -155,7 +162,7 @@ pub async fn hybrid_route(
                     task_type,
                     reason: format!(
                         "cold start: collecting data ({}/{} samples)",
-                        current_count,
+                        total_for_type,
                         config.min_samples
                     ),
                 })
