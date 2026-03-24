@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod feedback;
 mod providers;
+mod session;
 mod router;
 mod server;
 mod types;
@@ -21,6 +22,7 @@ pub struct AppState {
     pub registry: ProviderRegistry,
     pub config: AppConfig,
     pub feedback: feedback::FeedbackTracker,
+    pub session_router: session::SessionRouter,
 }
 
 #[tokio::main]
@@ -107,6 +109,7 @@ async fn main() {
         registry,
         config,
         feedback: feedback::FeedbackTracker::new(),
+        session_router: session::SessionRouter::new(),
     });
 
     let app = server::build_router(state);

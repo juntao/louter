@@ -49,6 +49,8 @@ pub async fn routing_stats(
         0.0
     };
 
+    let session_stats = state.session_router.get_stats().await;
+
     Ok(Json(serde_json::json!({
         "days": days,
         "total_requests": total_requests,
@@ -57,6 +59,7 @@ pub async fn routing_stats(
         "local_hit_rate": local_hit_rate,
         "by_destination": stats,
         "local_success_by_type": success_rates,
+        "sessions": session_stats,
     })))
 }
 

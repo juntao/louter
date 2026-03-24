@@ -67,15 +67,41 @@ pub async fn chat_completions(
         });
     }
 
-    // Try hybrid routing first (if enabled)
+    // Session-aware hybrid routing:
+    // 1. Continuation → reuse same model as previous turns
+    // 2. New conversation → make fresh routing decision via hybrid router
+    // 3. Mid-session failure → escalate to cloud (handled in fallback path)
     let hybrid_decision = if state.config.hybrid.enabled {
-        hybrid_router::hybrid_route(
+        let cached_target = state.session_router.get_session_target(&req.messages).await;
+
+        // Get the base routing decision (we always need it for provider references)
+        let base_decision = hybrid_router::hybrid_route(
             &state.config.hybrid,
             &state.registry,
             &state.db,
             &req,
         )
-        .await
+        .await;
+
+        match (&cached_target, base_decision) {
+            (_, None) => None, // No providers configured
+
+            (None, Some(decision)) => {
+                // New session: use hybrid router's decision and cache it
+                let target = match &decision {
+                    RoutingDecision::Local { .. } | RoutingDecision::LocalWithFallback { .. } => "local",
+                    RoutingDecision::Cloud { .. } => "cloud",
+                };
+                state.session_router.set_session_target(&req.messages, target).await;
+                tracing::info!("New session: target={}", target);
+                Some(decision)
+            }
+
+            (Some(target), Some(decision)) => {
+                // Existing session: override the decision to match cached target
+                Some(override_decision_target(decision, target, &state.config.hybrid))
+            }
+        }
     } else {
         None
     };
@@ -86,6 +112,56 @@ pub async fn chat_completions(
     } else {
         // Standard routing (no hybrid)
         handle_standard_request(state, req, key, request_model, task_type).await
+    }
+}
+
+/// Override a routing decision to match the cached session target.
+///
+/// Keeps provider references from the original decision but changes direction:
+/// - target="cloud" → forces Cloud (session was escalated or started on cloud)
+/// - target="local" → forces Local/LocalWithFallback (session started on local)
+fn override_decision_target(
+    decision: RoutingDecision,
+    target: &str,
+    _config: &crate::config::HybridConfig,
+) -> RoutingDecision {
+    match (target, &decision) {
+        // Already matches target → pass through
+        ("cloud", RoutingDecision::Cloud { .. }) => decision,
+        ("local", RoutingDecision::Local { .. }) => decision,
+        ("local", RoutingDecision::LocalWithFallback { .. }) => decision,
+
+        // Session wants cloud, we have LocalWithFallback → extract cloud provider
+        ("cloud", RoutingDecision::LocalWithFallback { .. }) => {
+            tracing::info!("Session: overriding local → cloud (cached/escalated)");
+            match decision {
+                RoutingDecision::LocalWithFallback { cloud_provider, cloud_model, task_type, .. } => {
+                    RoutingDecision::Cloud {
+                        provider: cloud_provider,
+                        model: cloud_model,
+                        task_type,
+                        reason: "session: staying on cloud".to_string(),
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Session wants cloud, we only have Local (no cloud ref) → pass through
+        // (rare: only happens if fallback is disabled)
+        ("cloud", RoutingDecision::Local { .. }) => {
+            tracing::info!("Session: want cloud but only have Local decision, passing through");
+            decision
+        }
+
+        // Session wants local, router wants cloud → keep cloud but log it
+        // (don't force local if the router specifically chose cloud — respect the data)
+        ("local", RoutingDecision::Cloud { .. }) => {
+            tracing::info!("Session: want local but router chose cloud, respecting router");
+            decision
+        }
+
+        _ => decision,
     }
 }
 
@@ -219,14 +295,16 @@ async fn handle_hybrid_request(
                         return Ok(Json(response).into_response());
                     }
 
-                    // Local response was bad → fallback to cloud
+                    // Local response was bad → fallback to cloud + escalate session
                     tracing::info!("Hybrid: local response invalid, falling back to cloud");
                     log_routing(&db_pool, &task_type, "local", false, false, latency).await;
+                    state.session_router.escalate_to_cloud(&local_req.messages).await;
                 }
                 Err(e) => {
                     let latency = start.elapsed().as_millis() as i32;
                     tracing::warn!("Hybrid: local model error: {e}, falling back to cloud");
                     log_routing(&db_pool, &task_type, "local", false, false, latency).await;
+                    state.session_router.escalate_to_cloud(&local_req.messages).await;
                 }
             }
 
