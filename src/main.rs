@@ -3,6 +3,7 @@ mod config;
 #[allow(dead_code)]
 mod db;
 mod error;
+mod dynamic_config;
 mod feedback;
 mod providers;
 mod session;
@@ -23,6 +24,7 @@ pub struct AppState {
     pub config: AppConfig,
     pub feedback: feedback::FeedbackTracker,
     pub session_router: session::SessionRouter,
+    pub dynamic_config: dynamic_config::DynamicHybridConfig,
 }
 
 #[tokio::main]
@@ -110,6 +112,7 @@ async fn main() {
         config,
         feedback: feedback::FeedbackTracker::new(),
         session_router: session::SessionRouter::new(),
+        dynamic_config: dynamic_config::DynamicHybridConfig::new(),
     });
 
     let app = server::build_router(state);

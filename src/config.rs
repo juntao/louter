@@ -100,6 +100,18 @@ pub struct HybridConfig {
     /// Task types eligible for local routing. Empty = all types.
     #[serde(default)]
     pub local_task_types: Vec<String>,
+
+    /// Maximum estimated context tokens for local routing.
+    /// Requests with more tokens go directly to cloud.
+    /// 0 = no limit (default). As the distilled model improves, increase this.
+    #[serde(default)]
+    pub max_local_context_tokens: u32,
+
+    /// Maximum latency in ms allowed for local model.
+    /// If avg local latency for a task type exceeds this, route to cloud.
+    /// 0 = no limit (default).
+    #[serde(default)]
+    pub max_local_latency_ms: u32,
 }
 
 impl Default for HybridConfig {
@@ -114,6 +126,8 @@ impl Default for HybridConfig {
             min_samples: 20,
             fallback_enabled: false,
             local_task_types: Vec::new(),
+            max_local_context_tokens: 0,
+            max_local_latency_ms: 0,
         }
     }
 }

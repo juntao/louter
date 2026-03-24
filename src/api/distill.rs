@@ -200,6 +200,7 @@ pub async fn get_distill_config(
 ) -> AppResult<Json<serde_json::Value>> {
     let hybrid = &state.config.hybrid;
     let distill = &state.config.distillation;
+    let overrides = state.dynamic_config.get().await;
 
     Ok(Json(serde_json::json!({
         "hybrid": {
@@ -212,11 +213,33 @@ pub async fn get_distill_config(
             "min_samples": hybrid.min_samples,
             "fallback_enabled": hybrid.fallback_enabled,
             "local_task_types": hybrid.local_task_types,
+            "max_local_context_tokens": hybrid.max_local_context_tokens,
+            "max_local_latency_ms": hybrid.max_local_latency_ms,
         },
         "distillation": {
             "collect_training_data": distill.collect_training_data,
             "max_samples": distill.max_samples,
             "only_successful": distill.only_successful,
         },
+        "dynamic_overrides": overrides,
+    })))
+}
+
+/// PUT /api/admin/distill/config — Update dynamic routing parameters at runtime
+///
+/// These overrides take effect immediately without restarting.
+/// As the distilled model improves, relax these thresholds to route more to local.
+pub async fn update_distill_config(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<crate::dynamic_config::Overrides>,
+) -> AppResult<Json<serde_json::Value>> {
+    state.dynamic_config.update(req).await;
+    let current = state.dynamic_config.get().await;
+
+    tracing::info!("Dynamic config updated: {:?}", current);
+
+    Ok(Json(serde_json::json!({
+        "message": "Config updated successfully",
+        "dynamic_overrides": current,
     })))
 }

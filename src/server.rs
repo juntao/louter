@@ -47,7 +47,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/distill/stats", get(api::distill::distill_stats))
         .route("/distill/routing", get(api::distill::routing_stats))
         .route("/distill/export", post(api::distill::export_samples))
-        .route("/distill/config", get(api::distill::get_distill_config));
+        .route("/distill/config", get(api::distill::get_distill_config))
+        .route("/distill/config", put(api::distill::update_distill_config));
 
     Router::new()
         .nest("/v1", v1_routes)

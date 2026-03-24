@@ -80,6 +80,7 @@ pub async fn chat_completions(
             &state.registry,
             &state.db,
             &req,
+            Some(&state.dynamic_config),
         )
         .await;
 
