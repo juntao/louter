@@ -16,7 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOUTER_DB="${LOUTER_DB:-${SCRIPT_DIR}/../louter.db}"
-BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-3B-Instruct}"
+BASE_MODEL="${BASE_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"
 OLLAMA_MODEL="${OLLAMA_MODEL:-louter-distilled}"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 MERGED_DIR="${SCRIPT_DIR}/merged_model"
@@ -92,11 +92,12 @@ if [ "$deploy_only" = false ]; then
         --data "$DATA_FILE" \
         --base-model "$BASE_MODEL" \
         --output-dir "$OUTPUT_DIR" \
-        --epochs 3 \
-        --batch-size 4 \
-        --gradient-accumulation 4 \
-        --lora-r 16 \
-        --lora-alpha 32
+        --epochs 5 \
+        --batch-size 8 \
+        --gradient-accumulation 2 \
+        --lr 5e-4 \
+        --lora-r 8 \
+        --lora-alpha 16
 
     echo "Training complete. Adapter saved to: $OUTPUT_DIR"
 

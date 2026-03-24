@@ -228,8 +228,8 @@ def main():
 
     # Model
     parser.add_argument(
-        "--base-model", default="Qwen/Qwen2.5-3B-Instruct",
-        help="Base model name or path (default: Qwen/Qwen2.5-3B-Instruct)"
+        "--base-model", default="Qwen/Qwen2.5-1.5B-Instruct",
+        help="Base model name or path (default: Qwen/Qwen2.5-1.5B-Instruct)"
     )
     parser.add_argument(
         "--data", help="Path to JSONL training data"
@@ -238,17 +238,17 @@ def main():
         "--output-dir", help="Output directory for adapter/merged model"
     )
 
-    # LoRA
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank (default: 16)")
-    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha (default: 32)")
+    # LoRA — smaller rank for 1.5B model (less parameters to adapt)
+    parser.add_argument("--lora-r", type=int, default=8, help="LoRA rank (default: 8)")
+    parser.add_argument("--lora-alpha", type=int, default=16, help="LoRA alpha (default: 16)")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout (default: 0.05)")
 
-    # Training
-    parser.add_argument("--epochs", type=int, default=3, help="Training epochs (default: 3)")
-    parser.add_argument("--batch-size", type=int, default=4, help="Batch size (default: 4)")
-    parser.add_argument("--gradient-accumulation", type=int, default=4, help="Gradient accumulation steps (default: 4)")
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate (default: 2e-4)")
-    parser.add_argument("--save-steps", type=int, default=100, help="Save checkpoint every N steps")
+    # Training — larger batch for small model, more epochs for less data
+    parser.add_argument("--epochs", type=int, default=5, help="Training epochs (default: 5)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (default: 8)")
+    parser.add_argument("--gradient-accumulation", type=int, default=2, help="Gradient accumulation steps (default: 2)")
+    parser.add_argument("--lr", type=float, default=5e-4, help="Learning rate (default: 5e-4)")
+    parser.add_argument("--save-steps", type=int, default=50, help="Save checkpoint every N steps")
     parser.add_argument("--gradient-checkpointing", action="store_true", help="Enable gradient checkpointing")
 
     # Merge
