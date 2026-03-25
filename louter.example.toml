@@ -10,6 +10,28 @@ path = "louter.db"
 
 # Providers and API keys are configured through the Web UI at http://localhost:6188
 
+# Hybrid inference: route simple requests to a local model, complex ones to the cloud.
+# Requires Ollama (or any OpenAI-compatible local provider) running locally.
+# [hybrid]
+# enabled = true
+# local_provider = "ollama"
+# local_model = "qwen2.5:1.5b"            # or "louter-distilled" after fine-tuning
+# cloud_provider = "anthropic"
+# cloud_model = "claude-sonnet-4-20250514"
+# min_local_success_rate = 0.7             # route to cloud if local success < 70%
+# min_samples = 20                         # min data before trusting success rate
+# fallback_enabled = true                  # try local first, fall back to cloud
+# local_task_types = ["general"]           # "general", "tool_call", "code", "math", "translation"
+# max_local_context_tokens = 2000          # large contexts go to cloud
+# max_local_latency_ms = 30000             # slow responses go to cloud
+
+# Distillation: automatically collect cloud responses as training data.
+# Use distill/run_distill.sh to export, compress, fine-tune, and deploy.
+# [distillation]
+# collect_training_data = true             # default: true
+# max_samples = 100000                     # prune oldest when exceeded
+# only_successful = true                   # only collect status-200 responses
+
 # Smart routing: when model="auto", classify messages and route to different providers.
 # Format: category = "provider_name/model_name"
 # Categories: code, math, translation, general (fallback)
