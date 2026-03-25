@@ -276,6 +276,18 @@ python train.py --data output/training_data_compressed.jsonl \
     --resume-from ./output/checkpoint-500
 ```
 
+**Choosing a different base model:** You can fine-tune any HuggingFace causal LM — pass `--base-model` to `train.py` or set `BASE_MODEL` for `run_distill.sh`:
+
+```bash
+# Larger Qwen for better quality (needs more VRAM/RAM)
+python train.py --data output/training_data_compressed.jsonl --base-model Qwen/Qwen2.5-3B-Instruct
+
+# Llama-based model
+BASE_MODEL=meta-llama/Llama-3.2-3B-Instruct ./run_distill.sh
+```
+
+Any model with standard attention layers works (Qwen, Llama, Mistral, Gemma, Phi, etc.). The model is downloaded automatically from Hugging Face on first use.
+
 **Output files after training:**
 - `distill/output/` — LoRA adapter weights (`adapter_model.safetensors`, `adapter_config.json`)
 - Checkpoints at `distill/output/checkpoint-*/`
