@@ -106,9 +106,9 @@ if [ "$deploy_only" = false ]; then
     fi
 fi
 
-# Step 3: Merge and deploy to Ollama
+# Step 3: Merge, convert to GGUF, and deploy to Ollama
 echo ""
-echo "=== Step 3: Merging and deploying to Ollama ==="
+echo "=== Step 3: Merging and converting to GGUF ==="
 
 python3 "$SCRIPT_DIR/train.py" \
     --merge \
@@ -116,27 +116,48 @@ python3 "$SCRIPT_DIR/train.py" \
     --adapter-path "$OUTPUT_DIR" \
     --output-dir "$MERGED_DIR"
 
-# Deploy to Ollama
-if command -v ollama &> /dev/null; then
-    echo "Deploying to Ollama as '$OLLAMA_MODEL'..."
-    ollama create "$OLLAMA_MODEL" -f "$MERGED_DIR/Modelfile"
-    echo ""
-    echo "=== Deployment complete! ==="
-    echo "Model: $OLLAMA_MODEL"
-    echo ""
-    echo "To use with Louter, add to louter.toml:"
-    echo ""
-    echo "  [hybrid]"
-    echo "  enabled = true"
-    echo "  local_provider = \"ollama\""
-    echo "  local_model = \"$OLLAMA_MODEL\""
-    echo "  cloud_provider = \"anthropic\""
-    echo "  cloud_model = \"claude-sonnet-4-20250514\""
-    echo "  min_local_success_rate = 0.7"
-    echo "  min_samples = 20"
-    echo "  fallback_enabled = true"
-    echo "  local_task_types = [\"tool_call\", \"code\", \"general\"]"
+# Check if GGUF conversion succeeded (Modelfile will exist if it did)
+if [ -f "$MERGED_DIR/Modelfile" ]; then
+    # Deploy to Ollama
+    if command -v ollama &> /dev/null; then
+        echo ""
+        echo "Deploying to Ollama as '$OLLAMA_MODEL'..."
+        ollama create "$OLLAMA_MODEL" -f "$MERGED_DIR/Modelfile"
+        echo ""
+        echo "=== Deployment complete! ==="
+        echo "Model: $OLLAMA_MODEL"
+        echo ""
+        echo "To use with Louter, add to louter.toml:"
+        echo ""
+        echo "  [hybrid]"
+        echo "  enabled = true"
+        echo "  local_provider = \"ollama\""
+        echo "  local_model = \"$OLLAMA_MODEL\""
+        echo "  cloud_provider = \"anthropic\""
+        echo "  cloud_model = \"claude-sonnet-4-20250514\""
+        echo "  min_local_success_rate = 0.7"
+        echo "  min_samples = 20"
+        echo "  fallback_enabled = true"
+        echo "  local_task_types = [\"tool_call\", \"code\", \"general\"]"
+    else
+        echo ""
+        echo "Ollama not found. Install Ollama first:"
+        echo "  curl -fsSL https://ollama.com/install.sh | sh"
+        echo ""
+        echo "Then import the model:"
+        echo "  ollama create $OLLAMA_MODEL -f $MERGED_DIR/Modelfile"
+    fi
 else
-    echo "Ollama not found. Merged model saved at: $MERGED_DIR"
-    echo "Install Ollama and run: ollama create $OLLAMA_MODEL -f $MERGED_DIR/Modelfile"
+    echo ""
+    echo "=== GGUF conversion was skipped ==="
+    echo "Merged model (safetensors) saved at: $MERGED_DIR"
+    echo ""
+    echo "Ollama requires GGUF format for Qwen models. To convert manually:"
+    echo "  git clone https://github.com/ggerganov/llama.cpp"
+    echo "  pip install -r llama.cpp/requirements.txt"
+    echo "  python llama.cpp/convert_hf_to_gguf.py $MERGED_DIR --outfile $MERGED_DIR/model-q4_k_m.gguf --outtype q4_k_m"
+    echo ""
+    echo "Then create an Ollama model:"
+    echo "  echo 'FROM $MERGED_DIR/model-q4_k_m.gguf' > $MERGED_DIR/Modelfile"
+    echo "  ollama create $OLLAMA_MODEL -f $MERGED_DIR/Modelfile"
 fi

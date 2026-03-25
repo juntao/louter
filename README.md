@@ -179,24 +179,264 @@ Export & compress: ./distill/run_distill.sh --export-only
     ↓
 Fine-tune local model (LoRA on Qwen2.5-1.5B)
     ↓
-Deploy to Ollama → local model handles more requests
+Deploy to Ollama or LlamaEdge → local model handles more requests
     ↓
 Fewer cloud calls → lower cost → repeat
 ```
 
-### Quick start
+### Prerequisites
+
+**Python 3.10+** and a virtual environment:
 
 ```bash
-# 1. Use Louter normally — cloud responses are collected automatically
-
-# 2. When you have 1000+ samples, run the full pipeline
 cd distill
+python3 -m venv venv
+source venv/bin/activate   # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+This installs PyTorch, Transformers, PEFT, TRL, and other dependencies. The base model (**Qwen2.5-1.5B-Instruct**) is downloaded automatically from [Hugging Face](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) the first time you run training — no manual download needed. It caches to `~/.cache/huggingface/hub/` (~3 GB).
+
+> To use a different base model (e.g. `Qwen/Qwen2.5-3B-Instruct` or `meta-llama/Llama-3.2-3B-Instruct`), set the `BASE_MODEL` environment variable or pass `--base-model` to `train.py`.
+
+**Hardware requirements:**
+
+| Setup | What to expect |
+|-------|----------------|
+| NVIDIA GPU (8 GB+ VRAM) | Fastest. Uses bfloat16 automatically |
+| Apple Silicon (M1/M2/M3/M4) | Good. Uses MPS with float16. 1.5B model trains fine on 16 GB RAM |
+| CPU only | Slow but works. Uses float32. Expect hours for 1000+ samples |
+
+### Step 1: Collect training data
+
+Enable data collection in `louter.toml` (enabled by default):
+
+```toml
+[hybrid]
+enabled = true
+local_provider = "ollama"
+local_model = "qwen2.5:1.5b"
+cloud_provider = "anthropic"
+cloud_model = "claude-sonnet-4-20250514"
+fallback_enabled = true
+
+[distillation]
+collect_training_data = true        # default: true
+max_samples = 100000                # prune oldest when exceeded
+only_successful = true              # only collect status-200 responses
+```
+
+Use Louter normally. Every cloud response is automatically saved to the `training_samples` table in SQLite. Check progress:
+
+```bash
+# Via API
+curl http://localhost:6188/api/admin/distill/stats
+
+# Or via the Web UI at http://localhost:6188 → Distillation dashboard
+```
+
+Aim for **1000+ samples** before your first training run (more is better).
+
+### Step 2: Export and compress
+
+```bash
+cd distill
+source venv/bin/activate
+
+# Export from SQLite + compress in one step
+./run_distill.sh --export-only
+
+# Or manually:
+python export.py --db ../louter.db --output output/training_data.jsonl --mark-exported --format openai
+python compress.py output/training_data.jsonl -o output/training_data_compressed.jsonl --stats
+```
+
+Output files:
+- `distill/output/training_data.jsonl` — raw exported samples
+- `distill/output/training_data_compressed.jsonl` — deduplicated and truncated (30-50% smaller)
+
+### Step 3: Fine-tune with LoRA
+
+```bash
+# Full pipeline (export + compress + train + merge + deploy)
 ./run_distill.sh
 
-# 3. Or step by step:
-./run_distill.sh --export-only   # Export + compress training data
-./run_distill.sh --train-only    # Train LoRA adapter
-./run_distill.sh --deploy-only   # Merge + deploy to Ollama
+# Or train only (data must already be exported)
+./run_distill.sh --train-only
+
+# Or run train.py directly for more control
+python train.py \
+    --data output/training_data_compressed.jsonl \
+    --base-model Qwen/Qwen2.5-1.5B-Instruct \
+    --output-dir ./output \
+    --epochs 5 --batch-size 8 --lr 5e-4
+
+# Resume from a checkpoint
+python train.py --data output/training_data_compressed.jsonl \
+    --resume-from ./output/checkpoint-500
+```
+
+**Choosing a different base model:** You can fine-tune any HuggingFace causal LM — pass `--base-model` to `train.py` or set `BASE_MODEL` for `run_distill.sh`:
+
+```bash
+# Larger Qwen for better quality (needs more VRAM/RAM)
+python train.py --data output/training_data_compressed.jsonl --base-model Qwen/Qwen2.5-3B-Instruct
+
+# Llama-based model
+BASE_MODEL=meta-llama/Llama-3.2-3B-Instruct ./run_distill.sh
+```
+
+Any model with standard attention layers works (Qwen, Llama, Mistral, Gemma, Phi, etc.). The model is downloaded automatically from Hugging Face on first use.
+
+**Output files after training:**
+- `distill/output/` — LoRA adapter weights (`adapter_model.safetensors`, `adapter_config.json`)
+- Checkpoints at `distill/output/checkpoint-*/`
+
+### Step 4: Merge and convert to GGUF
+
+Ollama requires **GGUF format** for Qwen models (direct safetensors import only works for Llama/Mistral/Gemma/Phi3). The pipeline handles this automatically if [llama.cpp](https://github.com/ggerganov/llama.cpp) is available:
+
+```bash
+# Set up llama.cpp for GGUF conversion (one-time)
+git clone https://github.com/ggerganov/llama.cpp ../llama.cpp
+pip install -r ../llama.cpp/requirements.txt
+
+# Merge + convert to GGUF (auto-detected by train.py)
+python train.py --merge \
+    --base-model Qwen/Qwen2.5-1.5B-Instruct \
+    --adapter-path ./output \
+    --output-dir ./merged_model
+
+# Or as part of the full pipeline:
+./run_distill.sh --deploy-only
+```
+
+You can choose a quantization type with `--gguf-type` (default: `q4_k_m`):
+- `f16` — full precision, largest file, best quality
+- `q8_0` — 8-bit, good balance
+- `q4_k_m` — 4-bit (recommended for 1.5B), small and fast
+- `q4_0` — 4-bit, smallest file
+
+**Output files after merge:**
+- `distill/merged_model/` — full merged model (safetensors + tokenizer + config)
+- `distill/merged_model/model-q4_k_m.gguf` — quantized GGUF model for Ollama
+- `distill/merged_model/Modelfile` — Ollama import file (auto-generated, points to GGUF)
+
+> If llama.cpp is not found, `train.py` will still save the merged safetensors model and print manual conversion instructions.
+
+### Step 5: Deploy the distilled model
+
+#### Option A: Deploy to Ollama (recommended)
+
+1. **Install Ollama** if you haven't already:
+
+```bash
+# macOS / Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Or download from https://ollama.com/download
+```
+
+2. **Start Ollama** (runs as a background service on port 11434):
+
+```bash
+ollama serve
+# On macOS, the Ollama app starts the server automatically
+```
+
+3. **Import the distilled model** (requires GGUF — see Step 4):
+
+```bash
+cd distill
+ollama create louter-distilled -f merged_model/Modelfile
+```
+
+4. **Verify it works:**
+
+```bash
+ollama run louter-distilled "Hello, what can you do?"
+```
+
+The model is now available at `http://localhost:11434` as `louter-distilled`.
+
+#### Option B: Deploy with LlamaEdge (WasmEdge)
+
+LlamaEdge also uses the GGUF file produced in Step 4.
+
+1. **Install LlamaEdge** — follow instructions at [LlamaEdge docs](https://llamaedge.com/docs/user-guide/get-started-with-llamaedge):
+
+```bash
+curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1
+```
+
+2. **Run the model** with an OpenAI-compatible API:
+
+```bash
+wasmedge --dir .:. \
+    --nn-preload default:GGML:AUTO:distill/merged_model/model-q4_k_m.gguf \
+    llama-api-server.wasm \
+    --prompt-template chatml \
+    --ctx-size 4096 \
+    --model-name louter-distilled \
+    --socket-addr 0.0.0.0:8080
+```
+
+The model is now available at `http://localhost:8080` as an OpenAI-compatible endpoint.
+
+### Step 6: Configure Louter to use the distilled model
+
+#### For Ollama deployment
+
+Add Ollama as a provider in Louter's Web UI (`http://localhost:6188`) or via API, then update `louter.toml`:
+
+```toml
+[hybrid]
+enabled = true
+local_provider = "ollama"
+local_model = "louter-distilled"         # ← your distilled model name
+cloud_provider = "anthropic"
+cloud_model = "claude-sonnet-4-20250514"
+min_local_success_rate = 0.7
+min_samples = 20
+fallback_enabled = true                  # try local first, fall back to cloud on failure
+local_task_types = ["general"]           # start conservative, expand later
+max_local_context_tokens = 2000
+max_local_latency_ms = 30000
+```
+
+#### For LlamaEdge deployment
+
+Register LlamaEdge as a custom OpenAI-compatible provider in the Web UI:
+- **Provider type**: OpenAI Compatible
+- **Base URL**: `http://localhost:8080/v1`
+- **Model name**: `louter-distilled`
+
+Then in `louter.toml`:
+
+```toml
+[hybrid]
+enabled = true
+local_provider = "llamaedge"             # ← name you gave it in Web UI
+local_model = "louter-distilled"
+cloud_provider = "anthropic"
+cloud_model = "claude-sonnet-4-20250514"
+fallback_enabled = true
+local_task_types = ["general"]
+```
+
+#### Gradually expand local routing
+
+As the distilled model proves itself, relax limits at runtime without restarting:
+
+```bash
+# After first distillation — also route tool_call tasks locally
+curl -X PUT http://localhost:6188/api/admin/distill/config \
+  -H "Content-Type: application/json" \
+  -d '{"local_task_types": ["general", "tool_call"], "max_local_context_tokens": 4000}'
+
+# After more training rounds — route everything locally
+curl -X PUT http://localhost:6188/api/admin/distill/config \
+  -d '{"local_task_types": ["general", "tool_call", "code"], "max_local_context_tokens": 8000}'
 ```
 
 ### Pipeline components
@@ -398,10 +638,87 @@ curl -X PUT http://localhost:6188/api/admin/distill/config \
 
 ## 蒸馏流水线
 
+### 环境准备
+
 ```bash
-# 积累 1000+ 云端样本后，一键蒸馏
 cd distill
-./run_distill.sh   # 导出 → 压缩 → 训练 → 部署到 Ollama
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+基础模型（**Qwen2.5-1.5B-Instruct**）在首次训练时自动从 [Hugging Face](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct) 下载，缓存在 `~/.cache/huggingface/hub/`（约 3 GB），无需手动下载。
+
+### 完整流程
+
+```bash
+# 1. 正常使用 Louter，云端响应自动收集到 SQLite
+
+# 2. 积累 1000+ 样本后，一键蒸馏
+cd distill && source venv/bin/activate
+./run_distill.sh   # 导出 → 压缩 → 训练 → 合并 → 部署到 Ollama
+
+# 3. 或分步执行：
+./run_distill.sh --export-only   # 导出 + 压缩训练数据
+./run_distill.sh --train-only    # 训练 LoRA 适配器
+./run_distill.sh --deploy-only   # 合并 + 部署到 Ollama
+```
+
+### 输出文件
+
+| 路径 | 内容 |
+|------|------|
+| `distill/output/` | LoRA 适配器权重（`adapter_model.safetensors`） |
+| `distill/merged_model/` | 合并后的完整模型（safetensors + tokenizer） |
+| `distill/merged_model/Modelfile` | Ollama 导入文件（自动生成） |
+
+### 转换为 GGUF 并部署到 Ollama
+
+Ollama 对 Qwen 模型需要 **GGUF 格式**（仅 Llama/Mistral/Gemma/Phi3 支持直接导入 safetensors）。如果本地有 [llama.cpp](https://github.com/ggerganov/llama.cpp)，流水线会自动转换：
+
+```bash
+# 一次性准备 llama.cpp（用于 GGUF 转换）
+git clone https://github.com/ggerganov/llama.cpp ../llama.cpp
+pip install -r ../llama.cpp/requirements.txt
+
+# 安装 Ollama（如未安装）
+curl -fsSL https://ollama.com/install.sh | sh
+
+# 启动 Ollama 服务
+ollama serve
+
+# 运行完整流水线（含自动 GGUF 转换 + 部署）
+cd distill && source venv/bin/activate
+./run_distill.sh
+
+# 验证
+ollama run louter-distilled "你好"
+```
+
+### 部署到 LlamaEdge（可选）
+
+LlamaEdge 同样使用上述步骤生成的 GGUF 文件（详见 [LlamaEdge 文档](https://llamaedge.com/docs/user-guide/get-started-with-llamaedge)）：
+
+```bash
+wasmedge --dir .:. \
+    --nn-preload default:GGML:AUTO:distill/merged_model/model-q4_k_m.gguf \
+    llama-api-server.wasm \
+    --prompt-template chatml --ctx-size 4096 \
+    --model-name louter-distilled --socket-addr 0.0.0.0:8080
+```
+
+### 配置 Louter 使用蒸馏模型
+
+```toml
+[hybrid]
+enabled = true
+local_provider = "ollama"
+local_model = "louter-distilled"         # ← 蒸馏模型名称
+cloud_provider = "anthropic"
+cloud_model = "claude-sonnet-4-20250514"
+min_local_success_rate = 0.7
+fallback_enabled = true
+local_task_types = ["general"]           # 先保守，后续逐步放开
 ```
 
 | 工具 | 用途 |
@@ -414,7 +731,7 @@ cd distill
 ### 数据飞轮
 
 ```
-正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署到 Ollama
+正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署到 Ollama / LlamaEdge
     ↑                                                    │
     └──── 本地模型更强 → 更多请求走本地 → 成本更低 ←───────┘
 ```
