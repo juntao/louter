@@ -67,52 +67,62 @@ pub async fn chat_completions(
         });
     }
 
-    // Session-aware hybrid routing:
-    // 1. Continuation → reuse same model as previous turns
-    // 2. New conversation → make fresh routing decision via hybrid router
-    // 3. Mid-session failure → escalate to cloud (handled in fallback path)
-    let hybrid_decision = if state.config.hybrid.enabled {
-        let cached_target = state.session_router.get_session_target(&req.messages).await;
+    // Per-key routing mode
+    match key.routing_mode.as_str() {
+        "hybrid" => {
+            // Check if hybrid config has providers configured
+            if state.config.hybrid.local_provider.is_empty()
+                || state.config.hybrid.cloud_provider.is_empty()
+            {
+                tracing::warn!(
+                    "Key '{}' has routing_mode=hybrid but hybrid config is incomplete, falling back to rules",
+                    key.name
+                );
+                handle_standard_request(state, req, key, request_model, task_type).await
+            } else {
+                // Session-aware hybrid routing
+                let hybrid_decision = {
+                    let cached_target = state.session_router.get_session_target(&req.messages).await;
+                    let base_decision = hybrid_router::hybrid_route(
+                        &state.config.hybrid,
+                        &state.registry,
+                        &state.db,
+                        &req,
+                        Some(&state.dynamic_config),
+                    )
+                    .await;
 
-        // Get the base routing decision (we always need it for provider references)
-        let base_decision = hybrid_router::hybrid_route(
-            &state.config.hybrid,
-            &state.registry,
-            &state.db,
-            &req,
-            Some(&state.dynamic_config),
-        )
-        .await;
-
-        match (&cached_target, base_decision) {
-            (_, None) => None, // No providers configured
-
-            (None, Some(decision)) => {
-                // New session: use hybrid router's decision and cache it
-                let target = match &decision {
-                    RoutingDecision::Local { .. } | RoutingDecision::LocalWithFallback { .. } => "local",
-                    RoutingDecision::Cloud { .. } => "cloud",
+                    match (&cached_target, base_decision) {
+                        (_, None) => None,
+                        (None, Some(decision)) => {
+                            let target = match &decision {
+                                RoutingDecision::Local { .. } | RoutingDecision::LocalWithFallback { .. } => "local",
+                                RoutingDecision::Cloud { .. } => "cloud",
+                            };
+                            state.session_router.set_session_target(&req.messages, target).await;
+                            tracing::info!("New session: target={}", target);
+                            Some(decision)
+                        }
+                        (Some(target), Some(decision)) => {
+                            Some(override_decision_target(decision, target, &state.config.hybrid))
+                        }
+                    }
                 };
-                state.session_router.set_session_target(&req.messages, target).await;
-                tracing::info!("New session: target={}", target);
-                Some(decision)
-            }
 
-            (Some(target), Some(decision)) => {
-                // Existing session: override the decision to match cached target
-                Some(override_decision_target(decision, target, &state.config.hybrid))
+                if let Some(decision) = hybrid_decision {
+                    handle_hybrid_request(state, req, key.id, request_model, task_type, decision).await
+                } else {
+                    handle_standard_request(state, req, key, request_model, task_type).await
+                }
             }
         }
-    } else {
-        None
-    };
-
-    // Route the request
-    if let Some(decision) = hybrid_decision {
-        handle_hybrid_request(state, req, key.id, request_model, task_type, decision).await
-    } else {
-        // Standard routing (no hybrid)
-        handle_standard_request(state, req, key, request_model, task_type).await
+        "smart" => {
+            handle_smart_request(state, req, key, request_model, task_type).await
+        }
+        _ => {
+            // "rules" or any unrecognized value → standard routing
+            handle_standard_request(state, req, key, request_model, task_type).await
+        }
     }
 }
 
@@ -163,6 +173,35 @@ fn override_decision_target(
         }
 
         _ => decision,
+    }
+}
+
+/// Handle a request using smart content-based routing.
+/// Always classifies the request and routes based on [smart_routing] config,
+/// regardless of the model name in the request.
+async fn handle_smart_request(
+    state: Arc<AppState>,
+    req: ChatCompletionRequest,
+    key: crate::db::schema::KeyRow,
+    request_model: String,
+    task_type: String,
+) -> Result<Response, AppError> {
+    if let Some(ref sr_config) = state.config.smart_routing {
+        match smart_router::smart_route(sr_config, &state.registry, &req.messages).await {
+            Some((provider, model)) => {
+                let mut req = req;
+                req.model = model.clone();
+                let key_id = key.id.clone();
+                execute_and_track(state, req, key_id, request_model, model, task_type, provider, "cloud").await
+            }
+            None => Err(AppError::NoRoute(
+                "Smart routing: no matching provider found".into(),
+            )),
+        }
+    } else {
+        Err(AppError::BadRequest(
+            "Smart routing not configured. Add [smart_routing] to louter.toml".into(),
+        ))
     }
 }
 

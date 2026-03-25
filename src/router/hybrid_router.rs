@@ -58,22 +58,6 @@ pub enum RoutingDecision {
     },
 }
 
-impl RoutingDecision {
-    #[allow(dead_code)]
-    pub fn task_type(&self) -> &str {
-        match self {
-            RoutingDecision::Local { task_type, .. } => task_type,
-            RoutingDecision::Cloud { task_type, .. } => task_type,
-            RoutingDecision::LocalWithFallback { task_type, .. } => task_type,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn is_local(&self) -> bool {
-        matches!(self, RoutingDecision::Local { .. })
-    }
-}
-
 /// Resolve a provider by name from the registry.
 async fn find_provider_by_name(
     registry: &ProviderRegistry,
@@ -93,9 +77,7 @@ pub async fn hybrid_route(
     req: &ChatCompletionRequest,
     dynamic: Option<&DynamicHybridConfig>,
 ) -> Option<RoutingDecision> {
-    if !config.enabled {
-        return None;
-    }
+    // Note: enabled check is done at the caller level (per-key routing_mode)
 
     // Resolve providers
     let local_provider = find_provider_by_name(registry, &config.local_provider).await?;

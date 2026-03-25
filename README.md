@@ -292,66 +292,28 @@ Any model with standard attention layers works (Qwen, Llama, Mistral, Gemma, Phi
 - `distill/output/` — LoRA adapter weights (`adapter_model.safetensors`, `adapter_config.json`)
 - Checkpoints at `distill/output/checkpoint-*/`
 
-### Step 4: Merge and convert to GGUF
+### Step 4: Merge and deploy to Ollama
 
-Ollama requires **GGUF format** for Qwen models (direct safetensors import only works for Llama/Mistral/Gemma/Phi3). The pipeline handles this automatically if [llama.cpp](https://github.com/ggerganov/llama.cpp) is available:
+Ollama 0.18+ can directly import safetensors for all model architectures (Qwen, Llama, Mistral, Gemma, Phi, etc.) — no GGUF conversion needed.
 
 ```bash
-# Set up llama.cpp for GGUF conversion (one-time)
-git clone https://github.com/ggerganov/llama.cpp ../llama.cpp
-pip install -r ../llama.cpp/requirements.txt
+# Merge adapter + deploy (as part of full pipeline)
+./run_distill.sh --deploy-only
 
-# Merge + convert to GGUF (auto-detected by train.py)
+# Or manually:
 python train.py --merge \
     --base-model Qwen/Qwen2.5-1.5B-Instruct \
     --adapter-path ./output \
     --output-dir ./merged_model
 
-# Or as part of the full pipeline:
-./run_distill.sh --deploy-only
-```
-
-You can choose a quantization type with `--gguf-type` (default: `q4_k_m`):
-- `f16` — full precision, largest file, best quality
-- `q8_0` — 8-bit, good balance
-- `q4_k_m` — 4-bit (recommended for 1.5B), small and fast
-- `q4_0` — 4-bit, smallest file
-
-**Output files after merge:**
-- `distill/merged_model/` — full merged model (safetensors + tokenizer + config)
-- `distill/merged_model/model-q4_k_m.gguf` — quantized GGUF model for Ollama
-- `distill/merged_model/Modelfile` — Ollama import file (auto-generated, points to GGUF)
-
-> If llama.cpp is not found, `train.py` will still save the merged safetensors model and print manual conversion instructions.
-
-### Step 5: Deploy the distilled model
-
-#### Option A: Deploy to Ollama (recommended)
-
-1. **Install Ollama** if you haven't already:
-
-```bash
-# macOS / Linux
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Or download from https://ollama.com/download
-```
-
-2. **Start Ollama** (runs as a background service on port 11434):
-
-```bash
-ollama serve
-# On macOS, the Ollama app starts the server automatically
-```
-
-3. **Import the distilled model** (requires GGUF — see Step 4):
-
-```bash
-cd distill
 ollama create louter-distilled -f merged_model/Modelfile
 ```
 
-4. **Verify it works:**
+**Output files after merge:**
+- `distill/merged_model/` — full merged model (safetensors + tokenizer + config)
+- `distill/merged_model/Modelfile` — Ollama import file (auto-generated)
+
+**Verify it works:**
 
 ```bash
 ollama run louter-distilled "Hello, what can you do?"
@@ -359,39 +321,12 @@ ollama run louter-distilled "Hello, what can you do?"
 
 The model is now available at `http://localhost:11434` as `louter-distilled`.
 
-#### Option B: Deploy with LlamaEdge (WasmEdge)
+### Step 5: Configure Louter to use the distilled model
 
-LlamaEdge also uses the GGUF file produced in Step 4.
-
-1. **Install LlamaEdge** — follow instructions at [LlamaEdge docs](https://llamaedge.com/docs/user-guide/get-started-with-llamaedge):
-
-```bash
-curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1
-```
-
-2. **Run the model** with an OpenAI-compatible API:
-
-```bash
-wasmedge --dir .:. \
-    --nn-preload default:GGML:AUTO:distill/merged_model/model-q4_k_m.gguf \
-    llama-api-server.wasm \
-    --prompt-template chatml \
-    --ctx-size 4096 \
-    --model-name louter-distilled \
-    --socket-addr 0.0.0.0:8080
-```
-
-The model is now available at `http://localhost:8080` as an OpenAI-compatible endpoint.
-
-### Step 6: Configure Louter to use the distilled model
-
-#### For Ollama deployment
-
-Add Ollama as a provider in Louter's Web UI (`http://localhost:6188`) or via API, then update `louter.toml`:
+Update `louter.toml` with the distilled model name:
 
 ```toml
 [hybrid]
-enabled = true
 local_provider = "ollama"
 local_model = "louter-distilled"         # ← your distilled model name
 cloud_provider = "anthropic"
@@ -404,25 +339,7 @@ max_local_context_tokens = 2000
 max_local_latency_ms = 30000
 ```
 
-#### For LlamaEdge deployment
-
-Register LlamaEdge as a custom OpenAI-compatible provider in the Web UI:
-- **Provider type**: OpenAI Compatible
-- **Base URL**: `http://localhost:8080/v1`
-- **Model name**: `louter-distilled`
-
-Then in `louter.toml`:
-
-```toml
-[hybrid]
-enabled = true
-local_provider = "llamaedge"             # ← name you gave it in Web UI
-local_model = "louter-distilled"
-cloud_provider = "anthropic"
-cloud_model = "claude-sonnet-4-20250514"
-fallback_enabled = true
-local_task_types = ["general"]
-```
+Then set the API key's routing mode to **hybrid** in the Web UI (Keys page) to enable local/cloud routing for that key.
 
 #### Gradually expand local routing
 
@@ -672,22 +589,12 @@ cd distill && source venv/bin/activate
 | `distill/merged_model/` | 合并后的完整模型（safetensors + tokenizer） |
 | `distill/merged_model/Modelfile` | Ollama 导入文件（自动生成） |
 
-### 转换为 GGUF 并部署到 Ollama
+### 部署到 Ollama
 
-Ollama 对 Qwen 模型需要 **GGUF 格式**（仅 Llama/Mistral/Gemma/Phi3 支持直接导入 safetensors）。如果本地有 [llama.cpp](https://github.com/ggerganov/llama.cpp)，流水线会自动转换：
+Ollama 0.18+ 可以直接导入所有架构的 safetensors（Qwen、Llama、Mistral、Gemma、Phi 等），无需 GGUF 转换：
 
 ```bash
-# 一次性准备 llama.cpp（用于 GGUF 转换）
-git clone https://github.com/ggerganov/llama.cpp ../llama.cpp
-pip install -r ../llama.cpp/requirements.txt
-
-# 安装 Ollama（如未安装）
-curl -fsSL https://ollama.com/install.sh | sh
-
-# 启动 Ollama 服务
-ollama serve
-
-# 运行完整流水线（含自动 GGUF 转换 + 部署）
+# 完整流水线自动部署
 cd distill && source venv/bin/activate
 ./run_distill.sh
 
@@ -695,23 +602,12 @@ cd distill && source venv/bin/activate
 ollama run louter-distilled "你好"
 ```
 
-### 部署到 LlamaEdge（可选）
-
-LlamaEdge 同样使用上述步骤生成的 GGUF 文件（详见 [LlamaEdge 文档](https://llamaedge.com/docs/user-guide/get-started-with-llamaedge)）：
-
-```bash
-wasmedge --dir .:. \
-    --nn-preload default:GGML:AUTO:distill/merged_model/model-q4_k_m.gguf \
-    llama-api-server.wasm \
-    --prompt-template chatml --ctx-size 4096 \
-    --model-name louter-distilled --socket-addr 0.0.0.0:8080
-```
-
 ### 配置 Louter 使用蒸馏模型
+
+更新 `louter.toml`：
 
 ```toml
 [hybrid]
-enabled = true
 local_provider = "ollama"
 local_model = "louter-distilled"         # ← 蒸馏模型名称
 cloud_provider = "anthropic"
@@ -720,6 +616,8 @@ min_local_success_rate = 0.7
 fallback_enabled = true
 local_task_types = ["general"]           # 先保守，后续逐步放开
 ```
+
+然后在 Web UI 的 Keys 页面将 API Key 的路由模式设为 **hybrid** 即可启用本地/云端混合路由。
 
 | 工具 | 用途 |
 |------|------|
@@ -731,7 +629,7 @@ local_task_types = ["general"]           # 先保守，后续逐步放开
 ### 数据飞轮
 
 ```
-正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署到 Ollama / LlamaEdge
+正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署到 Ollama
     ↑                                                    │
     └──── 本地模型更强 → 更多请求走本地 → 成本更低 ←───────┘
 ```

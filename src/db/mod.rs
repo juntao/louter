@@ -23,6 +23,9 @@ pub async fn init_db(database_url: &str) -> Result<SqlitePool, String> {
     let m003 = include_str!("../../migrations/003_training_samples.sql");
     let _ = sqlx::raw_sql(m003).execute(&pool).await;
 
+    let m004 = include_str!("../../migrations/004_key_routing_mode.sql");
+    let _ = sqlx::raw_sql(m004).execute(&pool).await;
+
     Ok(pool)
 }
 
@@ -112,12 +115,13 @@ pub async fn get_key_by_value(pool: &SqlitePool, key_value: &str) -> AppResult<O
 
 pub async fn insert_key(pool: &SqlitePool, row: &KeyRow) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO keys (id, key_value, name, default_provider_id, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        "INSERT INTO keys (id, key_value, name, default_provider_id, routing_mode, is_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&row.id)
     .bind(&row.key_value)
     .bind(&row.name)
     .bind(&row.default_provider_id)
+    .bind(&row.routing_mode)
     .bind(row.is_enabled)
     .bind(&row.created_at)
     .bind(&row.updated_at)
@@ -128,10 +132,11 @@ pub async fn insert_key(pool: &SqlitePool, row: &KeyRow) -> AppResult<()> {
 
 pub async fn update_key(pool: &SqlitePool, row: &KeyRow) -> AppResult<()> {
     sqlx::query(
-        "UPDATE keys SET name = ?, default_provider_id = ?, is_enabled = ?, updated_at = datetime('now') WHERE id = ?"
+        "UPDATE keys SET name = ?, default_provider_id = ?, routing_mode = ?, is_enabled = ?, updated_at = datetime('now') WHERE id = ?"
     )
     .bind(&row.name)
     .bind(&row.default_provider_id)
+    .bind(&row.routing_mode)
     .bind(row.is_enabled)
     .bind(&row.id)
     .execute(pool)

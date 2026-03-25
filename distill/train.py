@@ -2,23 +2,22 @@
 """
 Fine-tune a local model on distilled training data from Louter.
 
-Supports LoRA fine-tuning on tool-calling and code generation data,
-optimized for small models (1B-8B parameters).
+Supports LoRA fine-tuning on any HuggingFace causal LM (Qwen, Llama,
+Mistral, Gemma, Phi, etc.), optimized for small models (1B-8B parameters).
 
 Usage:
     # Basic training on exported data
-    python train.py --data training_data.jsonl --base-model Qwen/Qwen2.5-3B-Instruct
+    python train.py --data training_data.jsonl --base-model Qwen/Qwen2.5-1.5B-Instruct
 
-    # With custom LoRA config
+    # Use a different base model
     python train.py --data training_data.jsonl --base-model meta-llama/Llama-3.2-3B-Instruct \
         --lora-r 32 --lora-alpha 64 --epochs 3
 
     # Resume from checkpoint
-    python train.py --data training_data.jsonl --base-model Qwen/Qwen2.5-3B-Instruct \
-        --resume-from ./output/checkpoint-500
+    python train.py --data training_data.jsonl --resume-from ./output/checkpoint-500
 
-    # Export merged model for Ollama
-    python train.py --merge --base-model Qwen/Qwen2.5-3B-Instruct \
+    # Merge adapter and create Ollama Modelfile (Ollama 0.18+ imports safetensors directly)
+    python train.py --merge --base-model Qwen/Qwen2.5-1.5B-Instruct \
         --adapter-path ./output --output-dir ./merged_model
 """
 
@@ -203,97 +202,17 @@ def merge_and_export(args):
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
 
-    # Convert to GGUF if llama-cpp-conversions are available
-    gguf_path = convert_to_gguf(output_dir, args.gguf_type)
-
-    if gguf_path:
-        # Create Ollama Modelfile pointing to GGUF
-        modelfile_path = Path(output_dir) / "Modelfile"
-        modelfile_path.write_text(
-            f'FROM {gguf_path}\n'
-            f'PARAMETER temperature 0.7\n'
-            f'PARAMETER top_p 0.9\n'
-            f'TEMPLATE """{{{{- range .Messages }}}}{{{{- if eq .Role "system" }}}}<|im_start|>system\n{{{{ .Content }}}}<|im_end|>\n{{{{- else if eq .Role "user" }}}}<|im_start|>user\n{{{{ .Content }}}}<|im_end|>\n{{{{- else if eq .Role "assistant" }}}}<|im_start|>assistant\n{{{{ .Content }}}}<|im_end|>\n{{{{- end }}}}{{{{- end }}}}<|im_start|>assistant\n"""\n'
-            f'SYSTEM "You are a helpful AI assistant specialized in tool calling and code generation."\n'
-        )
-        print(f"Created Ollama Modelfile at: {modelfile_path}", file=sys.stderr)
-        print(
-            f"\nTo import into Ollama:\n"
-            f"  ollama create louter-distilled -f {modelfile_path}\n",
-            file=sys.stderr,
-        )
-    else:
-        print(
-            f"\nMerged model saved to: {output_dir}\n"
-            f"\nTo deploy to Ollama, convert to GGUF first:\n"
-            f"  pip install llama-cpp-python\n"
-            f"  # Or use llama.cpp's convert_hf_to_gguf.py:\n"
-            f"  git clone https://github.com/ggerganov/llama.cpp\n"
-            f"  python llama.cpp/convert_hf_to_gguf.py {output_dir} --outfile {output_dir}/model.gguf --outtype q4_k_m\n"
-            f"\n"
-            f"Then create a Modelfile:\n"
-            f"  echo 'FROM {output_dir}/model.gguf' > {output_dir}/Modelfile\n"
-            f"  ollama create louter-distilled -f {output_dir}/Modelfile\n",
-            file=sys.stderr,
-        )
-
-
-def convert_to_gguf(model_dir: str, quantization: str = "q4_k_m") -> str | None:
-    """Convert a HuggingFace model to GGUF format using llama.cpp.
-
-    Ollama only supports direct safetensors import for Llama, Mistral, Gemma,
-    and Phi3 architectures. Qwen and other architectures need GGUF conversion.
-
-    Returns the path to the GGUF file, or None if conversion tools are not available.
-    """
-    import shutil
-    import subprocess
-
-    gguf_path = str(Path(model_dir) / f"model-{quantization}.gguf")
-
-    # Try to find convert_hf_to_gguf.py from llama.cpp
-    # Check common locations: sibling dir, PATH, or llama-cpp-python install
-    convert_script = None
-    search_paths = [
-        Path(model_dir).parent / "llama.cpp" / "convert_hf_to_gguf.py",
-        Path.home() / "llama.cpp" / "convert_hf_to_gguf.py",
-    ]
-
-    for p in search_paths:
-        if p.exists():
-            convert_script = str(p)
-            break
-
-    # Also check if it's on PATH
-    if not convert_script and shutil.which("convert_hf_to_gguf.py"):
-        convert_script = "convert_hf_to_gguf.py"
-
-    if not convert_script:
-        print(
-            "Note: llama.cpp not found — skipping GGUF conversion.\n"
-            "To enable automatic conversion, clone llama.cpp next to the distill directory:\n"
-            "  git clone https://github.com/ggerganov/llama.cpp ../llama.cpp\n"
-            "  pip install -r ../llama.cpp/requirements.txt",
-            file=sys.stderr,
-        )
-        return None
-
-    print(f"Converting to GGUF ({quantization})...", file=sys.stderr)
-    try:
-        subprocess.run(
-            [
-                sys.executable, convert_script,
-                model_dir,
-                "--outfile", gguf_path,
-                "--outtype", quantization,
-            ],
-            check=True,
-        )
-        print(f"GGUF model saved to: {gguf_path}", file=sys.stderr)
-        return gguf_path
-    except subprocess.CalledProcessError as e:
-        print(f"Warning: GGUF conversion failed: {e}", file=sys.stderr)
-        return None
+    # Create Ollama Modelfile pointing to the merged safetensors directory.
+    # Ollama 0.18+ can directly import safetensors for all architectures
+    # (Qwen, Llama, Mistral, Gemma, Phi, etc.) — no GGUF conversion needed.
+    modelfile_path = Path(output_dir) / "Modelfile"
+    modelfile_path.write_text(f'FROM {output_dir}\n')
+    print(f"Created Ollama Modelfile at: {modelfile_path}", file=sys.stderr)
+    print(
+        f"\nTo import into Ollama:\n"
+        f"  ollama create louter-distilled -f {modelfile_path}\n",
+        file=sys.stderr,
+    )
 
 
 def main():
@@ -330,10 +249,6 @@ def main():
 
     # Merge
     parser.add_argument("--adapter-path", help="Path to LoRA adapter (for --merge)")
-    parser.add_argument(
-        "--gguf-type", default="q4_k_m",
-        help="GGUF quantization type (default: q4_k_m). Options: f16, q8_0, q4_k_m, q4_0, etc."
-    )
 
     # Resume
     parser.add_argument("--resume-from", help="Resume training from checkpoint")

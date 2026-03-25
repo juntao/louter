@@ -93,11 +93,11 @@ export default function Distill() {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-400">Status</span>
-                <span className={config.hybrid.enabled ? 'text-green-400' : 'text-gray-500'}>
-                  {config.hybrid.enabled ? 'Enabled' : 'Disabled'}
+                <span className={config.hybrid.local_provider ? 'text-green-400' : 'text-gray-500'}>
+                  {config.hybrid.local_provider ? 'Configured' : 'Not configured'}
                 </span>
               </div>
-              {config.hybrid.enabled && (
+              {config.hybrid.local_provider && (
                 <>
                   <div className="flex justify-between">
                     <span className="text-gray-400">Local</span>
@@ -116,6 +116,9 @@ export default function Distill() {
                     <span className={config.hybrid.fallback_enabled ? 'text-green-400' : 'text-gray-500'}>
                       {config.hybrid.fallback_enabled ? 'Enabled' : 'Disabled'}
                     </span>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    Set key routing mode to "hybrid" in Keys page to enable.
                   </div>
                 </>
               )}
@@ -266,7 +269,6 @@ export default function Distill() {
             <span className="text-blue-400 font-mono">3.</span> Enable hybrid mode in <code className="text-yellow-400">louter.toml</code>:
             <pre className="mt-1 bg-gray-800 rounded p-2 text-xs overflow-x-auto">
 {`[hybrid]
-enabled = true
 local_provider = "ollama"
 local_model = "louter-distilled"
 cloud_provider = "anthropic"

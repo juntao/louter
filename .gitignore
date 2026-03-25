@@ -5,3 +5,8 @@ louter.toml
 web/node_modules
 web/dist
 .DS_Store
+distill/output/
+distill/merged_model/
+distill/.venv/
+distill/venv/
+*.tgz

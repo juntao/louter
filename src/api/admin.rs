@@ -167,17 +167,34 @@ pub async fn list_keys(
     Ok(Json(keys))
 }
 
+fn default_routing_mode() -> String {
+    "rules".to_string()
+}
+
+fn validate_routing_mode(mode: &str) -> Result<String, AppError> {
+    match mode {
+        "rules" | "hybrid" | "smart" => Ok(mode.to_string()),
+        _ => Err(AppError::BadRequest(format!(
+            "Invalid routing_mode '{}'. Must be 'rules', 'hybrid', or 'smart'",
+            mode
+        ))),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateKeyRequest {
     #[serde(default)]
     pub name: String,
     pub default_provider_id: Option<String>,
+    #[serde(default = "default_routing_mode")]
+    pub routing_mode: String,
 }
 
 pub async fn create_key(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateKeyRequest>,
 ) -> AppResult<Json<KeyRow>> {
+    let routing_mode = validate_routing_mode(&req.routing_mode)?;
     let now = chrono::Utc::now().to_rfc3339();
     let key_value = format!("lot_{}", generate_key());
     let row = KeyRow {
@@ -185,6 +202,7 @@ pub async fn create_key(
         key_value,
         name: req.name,
         default_provider_id: req.default_provider_id,
+        routing_mode,
         is_enabled: true,
         created_at: now.clone(),
         updated_at: now,
@@ -209,6 +227,9 @@ pub async fn update_key(
     }
     if let Some(dp) = req.get("default_provider_id") {
         row.default_provider_id = dp.as_str().map(|s| s.to_string());
+    }
+    if let Some(mode) = req.get("routing_mode").and_then(|v| v.as_str()) {
+        row.routing_mode = validate_routing_mode(mode)?;
     }
     if let Some(enabled) = req.get("is_enabled").and_then(|v| v.as_bool()) {
         row.is_enabled = enabled;
@@ -284,9 +305,20 @@ pub async fn delete_routing_rule(
 
 pub async fn list_usage_logs(
     State(state): State<Arc<AppState>>,
-) -> AppResult<Json<Vec<crate::db::schema::UsageLogRow>>> {
-    let logs = db::list_usage_logs(&state.db, 200).await?;
-    Ok(Json(logs))
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let page: i32 = params.get("page").and_then(|p| p.parse().ok()).unwrap_or(1).max(1);
+    let page_size: i32 = params.get("page_size").and_then(|p| p.parse().ok()).unwrap_or(100).min(100).max(1);
+    let total = db::count_usage_logs(&state.db).await?;
+    let total_pages = ((total as f64) / (page_size as f64)).ceil() as i64;
+    let logs = db::list_usage_logs_paged(&state.db, page, page_size).await?;
+    Ok(Json(serde_json::json!({
+        "data": logs,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    })))
 }
 
 pub async fn usage_stats(

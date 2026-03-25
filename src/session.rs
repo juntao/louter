@@ -146,16 +146,6 @@ pub struct SessionStats {
     pub total_requests: u32,
 }
 
-/// Detect whether this is a new conversation or a continuation.
-///
-/// New conversation: only has system + 1 user message (no assistant history).
-/// Continuation: has assistant messages in the history.
-#[allow(dead_code)]
-pub fn is_new_conversation(messages: &[Message]) -> bool {
-    // If there's any assistant message, it's a continuation
-    !messages.iter().any(|m| m.role == "assistant")
-}
-
 /// Compute a session fingerprint from the conversation.
 ///
 /// Uses system prompt + first user message to identify the session.

@@ -5,6 +5,7 @@ interface Key {
   key_value: string
   name: string
   default_provider_id: string | null
+  routing_mode: string // "rules" | "hybrid" | "smart"
   is_enabled: boolean
   created_at: string
 }
@@ -53,7 +54,7 @@ export default function Keys() {
   const [rules, setRules] = useState<RoutingRule[]>([])
   const [providers, setProviders] = useState<Provider[]>([])
   const [showKeyForm, setShowKeyForm] = useState(false)
-  const [keyForm, setKeyForm] = useState({ name: '', default_provider_id: '' })
+  const [keyForm, setKeyForm] = useState({ name: '', default_provider_id: '', routing_mode: 'rules' })
   const [showRuleForm, setShowRuleForm] = useState<string | null>(null)
   const [ruleForm, setRuleForm] = useState({ model_pattern: '', target_provider_id: '', priority: 0 })
   const [copied, setCopied] = useState<string | null>(null)
@@ -79,10 +80,11 @@ export default function Keys() {
       body: JSON.stringify({
         name: keyForm.name,
         default_provider_id: keyForm.default_provider_id || null,
+        routing_mode: keyForm.routing_mode,
       }),
     })
     setShowKeyForm(false)
-    setKeyForm({ name: '', default_provider_id: '' })
+    setKeyForm({ name: '', default_provider_id: '', routing_mode: 'rules' })
     load()
   }
 
@@ -164,13 +166,22 @@ export default function Keys() {
 
       {showKeyForm && (
         <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-6">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <input
               placeholder="Key name"
               value={keyForm.name}
               onChange={e => setKeyForm({ ...keyForm, name: e.target.value })}
               className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm"
             />
+            <select
+              value={keyForm.routing_mode}
+              onChange={e => setKeyForm({ ...keyForm, routing_mode: e.target.value })}
+              className="bg-gray-950 border border-gray-700 rounded px-3 py-2 text-sm"
+            >
+              <option value="rules">Rules (standard routing)</option>
+              <option value="hybrid">Hybrid (local + cloud)</option>
+              <option value="smart">Smart (content-based)</option>
+            </select>
             <select
               value={keyForm.default_provider_id}
               onChange={e => setKeyForm({ ...keyForm, default_provider_id: e.target.value })}
@@ -195,6 +206,26 @@ export default function Keys() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium">{k.name || 'Unnamed Key'}</span>
+                <select
+                  value={k.routing_mode || 'rules'}
+                  onChange={async (e) => {
+                    await fetch(`/api/admin/keys/${k.id}`, {
+                      method: 'PUT',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ routing_mode: e.target.value }),
+                    })
+                    load()
+                  }}
+                  className={`text-xs px-2 py-0.5 rounded border-0 cursor-pointer ${
+                    k.routing_mode === 'hybrid' ? 'bg-purple-900 text-purple-300' :
+                    k.routing_mode === 'smart' ? 'bg-blue-900 text-blue-300' :
+                    'bg-gray-800 text-gray-400'
+                  }`}
+                >
+                  <option value="rules">rules</option>
+                  <option value="hybrid">hybrid</option>
+                  <option value="smart">smart</option>
+                </select>
                 <code className="text-xs bg-gray-950 px-2 py-1 rounded text-yellow-400">{k.key_value}</code>
                 <button
                   onClick={() => copyKey(k.key_value)}

@@ -12,8 +12,8 @@ path = "louter.db"
 
 # Hybrid inference: route simple requests to a local model, complex ones to the cloud.
 # Requires Ollama (or any OpenAI-compatible local provider) running locally.
+# To enable: set the key's routing_mode to "hybrid" in the Web UI (Keys page).
 # [hybrid]
-# enabled = true
 # local_provider = "ollama"
 # local_model = "qwen2.5:1.5b"            # or "louter-distilled" after fine-tuning
 # cloud_provider = "anthropic"

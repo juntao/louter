@@ -1,0 +1,1 @@
+ALTER TABLE keys ADD COLUMN routing_mode TEXT NOT NULL DEFAULT 'rules';
