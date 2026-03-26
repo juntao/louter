@@ -3,12 +3,12 @@
 FROM node:22-slim AS frontend
 WORKDIR /build/web
 COPY web/package*.json ./
-RUN npm ci
+RUN npm install --legacy-peer-deps
 COPY web/ ./
 RUN npm run build
 
 # Stage 2: Build Rust binary
-FROM rust:1.83-bookworm AS backend
+FROM rust:1-bookworm AS backend
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/

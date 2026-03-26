@@ -51,15 +51,23 @@ export default function Usage() {
   const [logs, setLogs] = useState<UsageLog[]>([])
   const [stats, setStats] = useState<Stats | null>(null)
   const [range, setRange] = useState<TimeRange>('30')
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [total, setTotal] = useState(0)
 
-  const loadLogs = () => {
-    fetch('/api/admin/usage').then(r => r.json()).then(setLogs).catch(() => {})
+  const loadLogs = (p: number = 1) => {
+    fetch(`/api/admin/usage?page=${p}&page_size=100`).then(r => r.json()).then(res => {
+      setLogs(res.data || [])
+      setPage(res.page || 1)
+      setTotalPages(res.total_pages || 1)
+      setTotal(res.total || 0)
+    }).catch(() => {})
   }
   const loadStats = (days: string) => {
     fetch(`/api/admin/usage/stats?days=${days}`).then(r => r.json()).then(setStats).catch(() => {})
   }
 
-  useEffect(() => { loadLogs(); loadStats(range) }, [])
+  useEffect(() => { loadLogs(1); loadStats(range) }, [])
   useEffect(() => { loadStats(range) }, [range])
 
   return (
@@ -121,7 +129,28 @@ export default function Usage() {
 
       {/* Log table */}
       <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
-        <h2 className="text-sm font-medium text-gray-400 mb-3">Recent Requests</h2>
+        <div className="flex justify-between items-center mb-3">
+          <h2 className="text-sm font-medium text-gray-400">Recent Requests <span className="text-gray-600 ml-1">({total.toLocaleString()} total)</span></h2>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { if (page > 1) loadLogs(page - 1) }}
+                disabled={page <= 1}
+                className={`px-2 py-1 text-xs rounded ${page <= 1 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-gray-700 bg-gray-800'}`}
+              >
+                Prev
+              </button>
+              <span className="text-xs text-gray-500">{page} / {totalPages}</span>
+              <button
+                onClick={() => { if (page < totalPages) loadLogs(page + 1) }}
+                disabled={page >= totalPages}
+                className={`px-2 py-1 text-xs rounded ${page >= totalPages ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-gray-700 bg-gray-800'}`}
+              >
+                Next
+              </button>
+            </div>
+          )}
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -157,6 +186,25 @@ export default function Usage() {
             </tbody>
           </table>
         </div>
+        {totalPages > 1 && (
+          <div className="flex justify-end items-center gap-2 mt-3 pt-3 border-t border-gray-800">
+            <button
+              onClick={() => { if (page > 1) loadLogs(page - 1) }}
+              disabled={page <= 1}
+              className={`px-2 py-1 text-xs rounded ${page <= 1 ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-gray-700 bg-gray-800'}`}
+            >
+              Prev
+            </button>
+            <span className="text-xs text-gray-500">{page} / {totalPages}</span>
+            <button
+              onClick={() => { if (page < totalPages) loadLogs(page + 1) }}
+              disabled={page >= totalPages}
+              className={`px-2 py-1 text-xs rounded ${page >= totalPages ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-gray-700 bg-gray-800'}`}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

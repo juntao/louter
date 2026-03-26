@@ -1,5 +1,5 @@
 image:
-  repository: drlucaslu/louter
+  repository: sixwings740/louter
   tag: "latest"
   pullPolicy: IfNotPresent
 
