@@ -432,11 +432,12 @@ Merge + deploy via Ollama / vLLM / HF Transformers
 
 ### Prerequisites
 
-Same Python environment as SFT, plus RL-specific dependencies:
+Same Python environment as SFT, plus RL-specific dependencies. You can reuse the existing SFT venv or create a separate one:
 
 ```bash
-cd distill/rl
-pip install -r requirements.txt
+cd distill
+source venv/bin/activate         # reuse existing SFT venv
+pip install -r rl/requirements.txt
 ```
 
 ### Pipeline commands
@@ -450,20 +451,23 @@ cd distill/rl
 ./run_rl.sh --score-only       # Score episodes with judge model
 ./run_rl.sh --rollout-only     # Generate rollouts from current model
 ./run_rl.sh --train-only       # Run GRPO training
+./run_rl.sh --eval-only        # Run evaluation only
 ./run_rl.sh --deploy-only      # Merge and deploy
+./run_rl.sh --opd              # Use combined GRPO + OPD training
 ```
 
 ### Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `LOUTER_DB` | `../louter.db` | Path to SQLite database |
+| `LOUTER_DB` | `../../louter.db` | Path to SQLite database |
 | `BASE_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | Base model for RL |
-| `ADAPTER_PATH` | `../distill/output` | Starting LoRA adapter (reuse SFT weights) |
+| `ADAPTER_PATH` | `../output` | Starting LoRA adapter (reuse SFT weights) |
 | `JUDGE_PROVIDER` | `anthropic` | Judge model provider: `anthropic`, `openai`, `ollama` |
-| `JUDGE_MODEL` | `claude-sonnet-4-20250514` | Model used to score responses |
+| `JUDGE_MODEL` | auto per provider | Model used to score responses |
 | `INFERENCE_BACKEND` | `transformers` | Rollout backend: `vllm`, `ollama`, `transformers` |
 | `OLLAMA_MODEL` | `louter-rl` | Name for the deployed model |
+| `MIN_EPISODES` | `100` | Minimum episodes required before training starts |
 
 ### RL training parameters
 
@@ -485,7 +489,7 @@ The RL pipeline is not limited to Ollama. Three serving options:
 **Ollama** (simplest):
 
 ```bash
-ollama create louter-rl -f merged_model/Modelfile
+ollama create louter-rl -f rl_merged/Modelfile
 ```
 
 **vLLM** (highest throughput on GPU):
@@ -497,7 +501,7 @@ ollama create louter-rl -f merged_model/Modelfile
 **HuggingFace Transformers** (works on Apple Silicon / CPU):
 
 ```bash
-python serve_hf.py --model ./merged_model --port 8000
+python serve_hf.py --model ./rl_merged --port 8000
 ```
 
 All three expose an OpenAI-compatible API. Point Louter at whichever you choose:
@@ -513,7 +517,9 @@ local_model = "louter-rl"
 
 When the local model fails and the cloud model succeeds on the same prompt, OPD provides token-level gradient signal — stronger than both SFT (sequence-level) and GRPO (scalar reward). The cloud response acts as a teacher: tokens where the local model assigns low probability to the correct cloud token get stronger gradient updates.
 
-OPD is combined with GRPO: `L_total = W_RL * L_grpo + W_OPD * L_opd`
+Enable with `--opd` flag: `./run_rl.sh --opd`
+
+OPD is combined with GRPO: `L_total = W_RL * L_grpo + W_OPD * L_opd`. Weights are configurable via `--w-rl` and `--w-opd` when calling `train_opd.py` directly.
 
 ### Safety rails
 
@@ -551,7 +557,7 @@ Louter offers two approaches to improve the local model. They are complementary 
 - One response per prompt — no comparison signal
 - The model learns "what a good answer looks like" but not "what makes one answer better than another"
 
-**GRPO RL (Group Relative Policy Optimization)** — the planned `distill/rl/` pipeline:
+**GRPO RL (Group Relative Policy Optimization)** — the `distill/rl/` pipeline:
 
 - Uses *both* successful and failed samples as reward signal
 - Generates **multiple completions** per prompt, scores them, and trains on the *relative differences*
@@ -886,7 +892,9 @@ cd distill/rl
 ./run_rl.sh --score-only       # 用评判模型打分
 ./run_rl.sh --rollout-only     # 生成多个回复
 ./run_rl.sh --train-only       # GRPO 训练
+./run_rl.sh --eval-only        # 仅运行评估
 ./run_rl.sh --deploy-only      # 合并部署
+./run_rl.sh --opd              # 使用 GRPO + OPD 联合训练
 ```
 
 ### 模型服务
@@ -895,13 +903,13 @@ RL 训练后的模型不限于 Ollama，支持三种服务方式：
 
 ```bash
 # Ollama（最简单）
-ollama create louter-rl -f merged_model/Modelfile
+ollama create louter-rl -f rl_merged/Modelfile
 
 # vLLM（GPU 上吞吐最高）
 ./serve_vllm.sh
 
 # HuggingFace Transformers（支持 Apple Silicon / CPU）
-python serve_hf.py --model ./merged_model --port 8000
+python serve_hf.py --model ./rl_merged --port 8000
 ```
 
 ## SFT vs RL 对比
