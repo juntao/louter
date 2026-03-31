@@ -9,6 +9,8 @@
   <a href="#features">Features</a> &bull;
   <a href="#hybrid-inference">Hybrid Inference</a> &bull;
   <a href="#distillation">Distillation</a> &bull;
+  <a href="#reinforcement-learning">Reinforcement Learning</a> &bull;
+  <a href="#sft-vs-rl">SFT vs RL</a> &bull;
   <a href="#routing">Routing</a> &bull;
   <a href="#%E4%B8%AD%E6%96%87%E8%AF%B4%E6%98%8E">中文说明</a>
 </p>
@@ -31,8 +33,8 @@ Run one local gateway, route every agent to the right model — cloud or local.
                   └─────┬─────┘
                         │
                   ┌─────▼─────┐
-                  │ Distill   │  Collect cloud responses
-                  │ Pipeline  │  Compress → Train → Deploy
+                  │ Distill   │  SFT: Compress → Train → Deploy
+                  │ + RL      │  RL:  Score → Rollout → GRPO → Deploy
                   └───────────┘  Data flywheel
 ```
 
@@ -115,6 +117,7 @@ response = client.chat.completions.create(
 - **One endpoint for all providers** — OpenAI, Anthropic, Azure, DeepSeek, Ollama, and any OpenAI-compatible API
 - **Hybrid inference** — Route simple requests to a fast local model, complex ones to the cloud. Session-aware: same model throughout a conversation, with auto-escalation on failure
 - **Distillation pipeline** — Automatically collect cloud responses as training data, compress, fine-tune a local model via LoRA, and deploy to Ollama
+- **Reinforcement learning** — GRPO-based RL training (inspired by [OpenClaw RL](https://github.com/Gen-Verse/OpenClaw-RL)) learns from both successes and failures, with judge-based rewards and on-policy distillation
 - **Smart routing** — `claude-*` → Anthropic, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek. Custom glob rules with priorities. `model: "auto"` for content-based routing
 - **Tool call normalizer** — Parse Hermes/Qwen/ReAct/JSON tool call formats from local models and convert to standard OpenAI format
 - **Implicit feedback** — Detect agent retries to automatically label training samples as success/failure
@@ -396,6 +399,203 @@ The Web UI dashboard (`http://localhost:6188/distill`) shows:
 | `GET /api/admin/distill/config` | Current hybrid + distillation config |
 | `PUT /api/admin/distill/config` | Update routing thresholds at runtime |
 
+## Reinforcement Learning
+
+While distillation (SFT) teaches the local model to *imitate* good cloud responses, reinforcement learning teaches it to *avoid bad responses* and *maximize reward*. Louter's RL pipeline is inspired by [OpenClaw RL](https://github.com/Gen-Verse/OpenClaw-RL) and adapted for single-machine, consumer-hardware deployment.
+
+See [PLAN_RL.md](PLAN_RL.md) for the full implementation plan.
+
+### How it works
+
+```
+Louter collects training samples (same as SFT)
+    ↓
+Export episodes with reward signals:
+  +1.0  successful response, no retry
+  -1.0  retry detected (agent re-sent similar request)
+  -0.5  local failed, cloud took over
+    ↓
+Score unscored episodes with a judge model (cloud or local)
+    ↓
+Generate G=4 completions per prompt from current local model
+    ↓
+Score each completion → compute group-relative advantages (GRPO)
+    ↓
+Train with clipped surrogate loss + KL penalty (LoRA)
+    ↓
+Evaluate: only deploy if RL model beats SFT baseline
+    ↓
+Merge + deploy via Ollama / vLLM / HF Transformers
+```
+
+**GRPO (Group Relative Policy Optimization)** is the core algorithm. For each training prompt, the model generates multiple completions. These are scored and compared *within the group* — completions that score above the group mean get positive advantage, below get negative. This relative comparison is what lets the model learn which response *style* works better, without needing a separate critic network.
+
+### Prerequisites
+
+Same Python environment as SFT, plus RL-specific dependencies:
+
+```bash
+cd distill/rl
+pip install -r requirements.txt
+```
+
+### Pipeline commands
+
+```bash
+# Full RL pipeline (export → score → rollout → train → evaluate → deploy)
+cd distill/rl
+./run_rl.sh
+
+# Or step by step:
+./run_rl.sh --score-only       # Score episodes with judge model
+./run_rl.sh --rollout-only     # Generate rollouts from current model
+./run_rl.sh --train-only       # Run GRPO training
+./run_rl.sh --deploy-only      # Merge and deploy
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `LOUTER_DB` | `../louter.db` | Path to SQLite database |
+| `BASE_MODEL` | `Qwen/Qwen2.5-1.5B-Instruct` | Base model for RL |
+| `ADAPTER_PATH` | `../distill/output` | Starting LoRA adapter (reuse SFT weights) |
+| `JUDGE_PROVIDER` | `anthropic` | Judge model provider: `anthropic`, `openai`, `ollama` |
+| `JUDGE_MODEL` | `claude-sonnet-4-20250514` | Model used to score responses |
+| `INFERENCE_BACKEND` | `transformers` | Rollout backend: `vllm`, `ollama`, `transformers` |
+| `OLLAMA_MODEL` | `louter-rl` | Name for the deployed model |
+
+### RL training parameters
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| Group size (G) | 4 | Balance between signal quality and compute |
+| Clip epsilon | 0.2 | Standard PPO/GRPO clip range |
+| KL penalty (beta) | 0.02 | Prevent divergence from base model |
+| Learning rate | 1e-5 | Lower than SFT to avoid catastrophic forgetting |
+| LoRA rank | 8 | Match existing SFT configuration |
+| Batch size | 2 | Each sample has G completions, so effective size is larger |
+| Gradient accumulation | 8 | Effective batch = 16 |
+| Max steps per round | 200 | Short RL rounds, frequent evaluation |
+
+### Serving the RL model
+
+The RL pipeline is not limited to Ollama. Three serving options:
+
+**Ollama** (simplest):
+
+```bash
+ollama create louter-rl -f merged_model/Modelfile
+```
+
+**vLLM** (highest throughput on GPU):
+
+```bash
+./serve_vllm.sh    # starts OpenAI-compatible API on :8000
+```
+
+**HuggingFace Transformers** (works on Apple Silicon / CPU):
+
+```bash
+python serve_hf.py --model ./merged_model --port 8000
+```
+
+All three expose an OpenAI-compatible API. Point Louter at whichever you choose:
+
+```toml
+[hybrid]
+local_provider = "ollama"                    # or "vllm" or "openai-compatible"
+local_endpoint = "http://localhost:8000/v1"  # for vllm/hf
+local_model = "louter-rl"
+```
+
+### On-Policy Distillation (OPD)
+
+When the local model fails and the cloud model succeeds on the same prompt, OPD provides token-level gradient signal — stronger than both SFT (sequence-level) and GRPO (scalar reward). The cloud response acts as a teacher: tokens where the local model assigns low probability to the correct cloud token get stronger gradient updates.
+
+OPD is combined with GRPO: `L_total = W_RL * L_grpo + W_OPD * L_opd`
+
+### Safety rails
+
+- **KL divergence cap** — Training stops early if the model drifts too far from the reference (threshold: 0.1)
+- **Reward hacking detection** — If judge scores improve but actual retry rates don't, the reward model may be exploited
+- **Automatic rollback** — Previous model kept as `louter-rl-prev` for fallback
+- **Evaluation gate** — Model is only deployed if it beats the SFT baseline on held-out prompts
+
+### RL pipeline components
+
+| Tool | Purpose |
+|------|---------|
+| `distill/rl/export_episodes.py` | Convert training_samples → RL episodes with reward signals |
+| `distill/rl/score_with_judge.py` | Score local model responses using a judge model |
+| `distill/rl/score_tool_calls.py` | Structural rewards for tool-call tasks (valid JSON, correct schema) |
+| `distill/rl/generate_rollouts.py` | Generate G completions per prompt via vLLM/Ollama/Transformers |
+| `distill/rl/reward_rollouts.py` | Score rollouts + compute GRPO group-relative advantages |
+| `distill/rl/train_grpo.py` | GRPO training with LoRA (clipped surrogate + KL penalty) |
+| `distill/rl/train_opd.py` | On-Policy Distillation from cloud→local (optional) |
+| `distill/rl/evaluate.py` | Compare RL model vs SFT baseline before deployment |
+| `distill/rl/serve_vllm.sh` | Serve merged model via vLLM |
+| `distill/rl/serve_hf.py` | Serve merged model via HuggingFace Transformers |
+| `distill/rl/run_rl.sh` | End-to-end RL pipeline orchestrator |
+
+## SFT vs RL
+
+Louter offers two approaches to improve the local model. They are complementary — SFT provides the foundation, RL refines it.
+
+### What each approach does
+
+**SFT (Supervised Fine-Tuning)** — the existing `distill/` pipeline:
+
+- Filters to `is_successful=1` samples only — failed responses are thrown away
+- Trains the model to imitate cloud responses token-by-token
+- One response per prompt — no comparison signal
+- The model learns "what a good answer looks like" but not "what makes one answer better than another"
+
+**GRPO RL (Group Relative Policy Optimization)** — the planned `distill/rl/` pipeline:
+
+- Uses *both* successful and failed samples as reward signal
+- Generates **multiple completions** per prompt, scores them, and trains on the *relative differences*
+- A retry-detected response becomes a -1.0 reward — the model actively learns to avoid that behavior
+- Judge model scores responses on a spectrum, not just pass/fail
+- KL penalty prevents the model from diverging too far from the base
+
+### Concrete example
+
+User asks for a tool call. With **SFT**, Louter exports the cloud model's correct response and trains the local model to copy it.
+
+With **GRPO RL**, the local model generates 4 different responses for that prompt:
+
+| Completion | Score | Advantage |
+|---|---|---|
+| Correct JSON, right function, valid args | +0.8 | +1.2 (above group mean) |
+| Right function, minor arg typo | +0.1 | -0.2 |
+| Right function, malformed JSON | -0.2 | -0.5 |
+| Hallucinated nonexistent function | -1.0 | -1.8 (far below group mean) |
+
+GRPO pushes the model toward completion 1 and away from completion 4. SFT would never see those 3 failures — it only trains on the cloud's correct response.
+
+### When to use which
+
+| Scenario | Recommendation |
+|---|---|
+| First training round, < 1000 samples | SFT only — need a solid baseline |
+| 1000+ samples, model already SFT-trained | Add RL on top of SFT adapter |
+| Local model keeps making the same mistakes | RL — it explicitly penalizes failure patterns |
+| Plenty of cloud responses, few local failures | SFT — most signal is positive anyway |
+| Tool-calling quality needs improvement | RL — structural rewards catch format errors SFT misses |
+
+### Recommended workflow
+
+```
+1. Collect 1000+ samples via normal Louter usage
+2. Run SFT:  ./distill/run_distill.sh
+3. Deploy SFT model, use it for a while, collect more data
+4. Run RL:   ./distill/rl/run_rl.sh    (starts from SFT adapter)
+5. Deploy RL model → fewer failures → better data → repeat
+```
+
+The RL pipeline reuses the SFT adapter as its starting point (`ADAPTER_PATH`), so you never lose the SFT foundation. Each RL round further refines what SFT learned.
+
 ## Routing
 
 Three-tier routing — no configuration needed for common providers:
@@ -639,11 +839,105 @@ local_task_types = ["general"]           # 先保守，后续逐步放开
 - **一个端点接入所有供应商** — OpenAI、Anthropic、Azure、DeepSeek、Ollama 及任意 OpenAI 兼容 API
 - **混合推理** — 本地优先 + 云端回退，Session 级路由，失败自动升级
 - **蒸馏飞轮** — 自动收集、压缩、训练、部署，本地模型持续进化
+- **强化学习** — 基于 GRPO 的 RL 训练（受 [OpenClaw RL](https://github.com/Gen-Verse/OpenClaw-RL) 启发），从成功和失败中学习，支持评判模型打分和在线蒸馏
 - **工具调用标准化** — 解析 Hermes/Qwen/ReAct/JSON 格式，统一转换为 OpenAI 格式
 - **隐式反馈** — 检测 Agent 重试行为，自动标注训练样本的成功/失败
 - **运行时可调** — 通过 API 动态调整路由阈值，无需重启
 - **智能路由** — 按模型名前缀自动匹配，或用 `model: "auto"` 按内容分类路由
 - **内置 Web UI** — 管理供应商、Key、路由规则、蒸馏状态和用量统计
+
+## 强化学习
+
+蒸馏（SFT）教本地模型*模仿*好的云端响应，强化学习则教它*避免坏的响应*并*最大化奖励*。Louter 的 RL 流水线受 [OpenClaw RL](https://github.com/Gen-Verse/OpenClaw-RL) 启发，适配单机消费级硬件。
+
+详见 [PLAN_RL.md](PLAN_RL.md)。
+
+### 工作原理
+
+```
+Louter 收集训练样本（与 SFT 相同）
+    ↓
+导出带奖励信号的 episode：
+  +1.0  成功响应，无重试
+  -1.0  检测到重试（Agent 重新发送了类似请求）
+  -0.5  本地失败，云端接管
+    ↓
+用评判模型对未打分的 episode 评分
+    ↓
+每个 prompt 用当前本地模型生成 G=4 个回复
+    ↓
+对每个回复评分 → 计算组内相对优势（GRPO）
+    ↓
+用裁剪代理损失 + KL 惩罚训练（LoRA）
+    ↓
+评估：只有 RL 模型超过 SFT 基线才部署
+    ↓
+合并 + 部署（Ollama / vLLM / HF Transformers）
+```
+
+### 命令
+
+```bash
+# 完整 RL 流水线
+cd distill/rl
+./run_rl.sh
+
+# 分步执行
+./run_rl.sh --score-only       # 用评判模型打分
+./run_rl.sh --rollout-only     # 生成多个回复
+./run_rl.sh --train-only       # GRPO 训练
+./run_rl.sh --deploy-only      # 合并部署
+```
+
+### 模型服务
+
+RL 训练后的模型不限于 Ollama，支持三种服务方式：
+
+```bash
+# Ollama（最简单）
+ollama create louter-rl -f merged_model/Modelfile
+
+# vLLM（GPU 上吞吐最高）
+./serve_vllm.sh
+
+# HuggingFace Transformers（支持 Apple Silicon / CPU）
+python serve_hf.py --model ./merged_model --port 8000
+```
+
+## SFT vs RL 对比
+
+| | SFT（蒸馏） | GRPO RL（强化学习） |
+|---|---|---|
+| **训练数据** | 只用成功样本 | 成功和失败样本都用 |
+| **学习方式** | 逐 token 模仿云端响应 | 生成多个回复，对比组内相对优劣 |
+| **失败处理** | 丢弃失败样本 | 失败样本获得 -1.0 奖励，模型学会避免 |
+| **评分** | 二元（成功/失败） | 评判模型连续打分 |
+| **适用场景** | 首次训练，< 1000 样本 | SFT 之后进一步优化 |
+
+### 具体例子
+
+用户请求一个工具调用。**SFT** 导出云端的正确响应，训练本地模型模仿它。
+
+**GRPO RL** 让本地模型对同一个 prompt 生成 4 个不同回复：
+
+| 回复 | 得分 | 优势 |
+|---|---|---|
+| JSON 正确，函数正确，参数有效 | +0.8 | +1.2（高于组均值） |
+| 函数正确，参数小错误 | +0.1 | -0.2 |
+| 函数正确，JSON 格式错误 | -0.2 | -0.5 |
+| 幻觉了一个不存在的函数 | -1.0 | -1.8（远低于组均值） |
+
+GRPO 推动模型趋向回复 1，远离回复 4。SFT 永远不会看到那 3 个失败 — 它只训练云端的正确响应。
+
+### 推荐工作流
+
+```
+1. 正常使用 Louter，积累 1000+ 样本
+2. 运行 SFT：./distill/run_distill.sh
+3. 部署 SFT 模型，继续使用，收集更多数据
+4. 运行 RL：./distill/rl/run_rl.sh（从 SFT 适配器开始）
+5. 部署 RL 模型 → 更少失败 → 更好数据 → 重复
+```
 
 ## 许可证
 
