@@ -116,7 +116,7 @@ response = client.chat.completions.create(
 
 - **One endpoint for all providers** — OpenAI, Anthropic, Azure, DeepSeek, Ollama, and any OpenAI-compatible API
 - **Hybrid inference** — Route simple requests to a fast local model, complex ones to the cloud. Session-aware: same model throughout a conversation, with auto-escalation on failure
-- **Distillation pipeline** — Automatically collect cloud responses as training data, compress, fine-tune a local model via LoRA, and deploy to Ollama
+- **Distillation pipeline** — Automatically collect cloud responses as training data, compress, fine-tune a local model via LoRA, and serve via HuggingFace Transformers or vLLM
 - **Reinforcement learning** — GRPO-based RL training (inspired by [OpenClaw RL](https://github.com/Gen-Verse/OpenClaw-RL)) learns from both successes and failures, with judge-based rewards and on-policy distillation
 - **Smart routing** — `claude-*` → Anthropic, `gpt-*` → OpenAI, `deepseek-*` → DeepSeek. Custom glob rules with priorities. `model: "auto"` for content-based routing
 - **Tool call normalizer** — Parse Hermes/Qwen/ReAct/JSON tool call formats from local models and convert to standard OpenAI format
@@ -182,7 +182,7 @@ Export & compress: ./distill/run_distill.sh --export-only
     ↓
 Fine-tune local model (LoRA on Qwen2.5-1.5B)
     ↓
-Deploy to Ollama or LlamaEdge → local model handles more requests
+Serve via HF / vLLM → local model handles more requests
     ↓
 Fewer cloud calls → lower cost → repeat
 ```
@@ -295,12 +295,10 @@ Any model with standard attention layers works (Qwen, Llama, Mistral, Gemma, Phi
 - `distill/output/` — LoRA adapter weights (`adapter_model.safetensors`, `adapter_config.json`)
 - Checkpoints at `distill/output/checkpoint-*/`
 
-### Step 4: Merge and deploy to Ollama
-
-Ollama 0.18+ can directly import safetensors for all model architectures (Qwen, Llama, Mistral, Gemma, Phi, etc.) — no GGUF conversion needed.
+### Step 4: Merge and serve the model
 
 ```bash
-# Merge adapter + deploy (as part of full pipeline)
+# Merge adapter (as part of full pipeline)
 ./run_distill.sh --deploy-only
 
 # Or manually:
@@ -308,30 +306,40 @@ python train.py --merge \
     --base-model Qwen/Qwen2.5-1.5B-Instruct \
     --adapter-path ./output \
     --output-dir ./merged_model
-
-ollama create louter-distilled -f merged_model/Modelfile
 ```
 
 **Output files after merge:**
 - `distill/merged_model/` — full merged model (safetensors + tokenizer + config)
-- `distill/merged_model/Modelfile` — Ollama import file (auto-generated)
+
+**Serve the merged model** (pick one):
+
+```bash
+# HuggingFace Transformers — works on CUDA, Apple Silicon, CPU
+python rl/serve_hf.py --model ./merged_model --port 8000
+
+# vLLM — highest throughput, requires CUDA GPU
+MODEL_PATH=./merged_model ./rl/serve_vllm.sh
+
+# Ollama — alternative if already installed
+ollama create louter-distilled -f merged_model/Modelfile
+```
 
 **Verify it works:**
 
 ```bash
-ollama run louter-distilled "Hello, what can you do?"
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "louter-distilled", "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
-
-The model is now available at `http://localhost:11434` as `louter-distilled`.
 
 ### Step 5: Configure Louter to use the distilled model
 
-Update `louter.toml` with the distilled model name:
+Update `louter.toml` with the distilled model:
 
 ```toml
 [hybrid]
-local_provider = "ollama"
-local_model = "louter-distilled"         # ← your distilled model name
+local_endpoint = "http://localhost:8000/v1"  # HF or vLLM
+local_model = "louter-distilled"             # your distilled model name
 cloud_provider = "anthropic"
 cloud_model = "claude-sonnet-4-20250514"
 min_local_success_rate = 0.7
@@ -366,7 +374,7 @@ curl -X PUT http://localhost:6188/api/admin/distill/config \
 | `distill/export.py` | Export training samples from SQLite as JSONL (OpenAI / ShareGPT format) |
 | `distill/compress.py` | Compress training data: dedup system prompts, truncate tool results, strip verbose sections |
 | `distill/train.py` | LoRA fine-tuning on Qwen2.5-1.5B (supports CUDA / MPS / CPU) |
-| `distill/run_distill.sh` | End-to-end: export → compress → train → merge → deploy to Ollama |
+| `distill/run_distill.sh` | End-to-end: export → compress → train → merge → serve |
 
 ### Training parameters (optimized for 1.5B model)
 
@@ -484,12 +492,12 @@ cd distill/rl
 
 ### Serving the RL model
 
-The RL pipeline is not limited to Ollama. Three serving options:
+The RL pipeline supports multiple serving backends. All expose an OpenAI-compatible API.
 
-**Ollama** (simplest):
+**HuggingFace Transformers** (recommended — works on CUDA, Apple Silicon, CPU):
 
 ```bash
-ollama create louter-rl -f rl_merged/Modelfile
+python serve_hf.py --model ./rl_merged --port 8000
 ```
 
 **vLLM** (highest throughput on GPU):
@@ -498,18 +506,17 @@ ollama create louter-rl -f rl_merged/Modelfile
 ./serve_vllm.sh    # starts OpenAI-compatible API on :8000
 ```
 
-**HuggingFace Transformers** (works on Apple Silicon / CPU):
+**Ollama** (alternative, if already installed):
 
 ```bash
-python serve_hf.py --model ./rl_merged --port 8000
+ollama create louter-rl -f rl_merged/Modelfile
 ```
 
-All three expose an OpenAI-compatible API. Point Louter at whichever you choose:
+Point Louter at whichever backend you choose:
 
 ```toml
 [hybrid]
-local_provider = "ollama"                    # or "vllm" or "openai-compatible"
-local_endpoint = "http://localhost:8000/v1"  # for vllm/hf
+local_endpoint = "http://localhost:8000/v1"  # for HF or vLLM
 local_model = "louter-rl"
 ```
 
@@ -779,12 +786,12 @@ pip install -r requirements.txt
 
 # 2. 积累 1000+ 样本后，一键蒸馏
 cd distill && source venv/bin/activate
-./run_distill.sh   # 导出 → 压缩 → 训练 → 合并 → 部署到 Ollama
+./run_distill.sh   # 导出 → 压缩 → 训练 → 合并 → 部署
 
 # 3. 或分步执行：
 ./run_distill.sh --export-only   # 导出 + 压缩训练数据
 ./run_distill.sh --train-only    # 训练 LoRA 适配器
-./run_distill.sh --deploy-only   # 合并 + 部署到 Ollama
+./run_distill.sh --deploy-only   # 合并 + 部署
 ```
 
 ### 输出文件
@@ -793,19 +800,18 @@ cd distill && source venv/bin/activate
 |------|------|
 | `distill/output/` | LoRA 适配器权重（`adapter_model.safetensors`） |
 | `distill/merged_model/` | 合并后的完整模型（safetensors + tokenizer） |
-| `distill/merged_model/Modelfile` | Ollama 导入文件（自动生成） |
 
-### 部署到 Ollama
-
-Ollama 0.18+ 可以直接导入所有架构的 safetensors（Qwen、Llama、Mistral、Gemma、Phi 等），无需 GGUF 转换：
+### 服务模型
 
 ```bash
-# 完整流水线自动部署
-cd distill && source venv/bin/activate
-./run_distill.sh
+# HuggingFace Transformers（推荐 — 支持 CUDA、Apple Silicon、CPU）
+python rl/serve_hf.py --model ./merged_model --port 8000
 
-# 验证
-ollama run louter-distilled "你好"
+# vLLM（GPU 上吞吐最高）
+MODEL_PATH=./merged_model ./rl/serve_vllm.sh
+
+# Ollama（备选，如已安装）
+ollama create louter-distilled -f merged_model/Modelfile
 ```
 
 ### 配置 Louter 使用蒸馏模型
@@ -814,8 +820,8 @@ ollama run louter-distilled "你好"
 
 ```toml
 [hybrid]
-local_provider = "ollama"
-local_model = "louter-distilled"         # ← 蒸馏模型名称
+local_endpoint = "http://localhost:8000/v1"  # HF 或 vLLM
+local_model = "louter-distilled"             # ← 蒸馏模型名称
 cloud_provider = "anthropic"
 cloud_model = "claude-sonnet-4-20250514"
 min_local_success_rate = 0.7
@@ -830,12 +836,12 @@ local_task_types = ["general"]           # 先保守，后续逐步放开
 | `distill/export.py` | 从 SQLite 导出训练数据（OpenAI / ShareGPT 格式） |
 | `distill/compress.py` | 压缩训练数据：去重 system prompt、截断工具结果 |
 | `distill/train.py` | LoRA 微调（基于 Qwen2.5-1.5B，支持 CUDA / MPS / CPU） |
-| `distill/run_distill.sh` | 端到端：导出 → 压缩 → 训练 → 合并 → 部署 Ollama |
+| `distill/run_distill.sh` | 端到端：导出 → 压缩 → 训练 → 合并 → 部署服务 |
 
 ### 数据飞轮
 
 ```
-正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署到 Ollama
+正常使用 Louter → 云端响应自动收集 → 压缩 + 微调 → 部署服务
     ↑                                                    │
     └──── 本地模型更强 → 更多请求走本地 → 成本更低 ←───────┘
 ```
@@ -899,17 +905,17 @@ cd distill/rl
 
 ### 模型服务
 
-RL 训练后的模型不限于 Ollama，支持三种服务方式：
+RL 训练后的模型支持多种服务方式，均提供 OpenAI 兼容 API：
 
 ```bash
-# Ollama（最简单）
-ollama create louter-rl -f rl_merged/Modelfile
+# HuggingFace Transformers（推荐 — 支持 CUDA、Apple Silicon、CPU）
+python serve_hf.py --model ./rl_merged --port 8000
 
 # vLLM（GPU 上吞吐最高）
 ./serve_vllm.sh
 
-# HuggingFace Transformers（支持 Apple Silicon / CPU）
-python serve_hf.py --model ./rl_merged --port 8000
+# Ollama（备选，如已安装）
+ollama create louter-rl -f rl_merged/Modelfile
 ```
 
 ## SFT vs RL 对比
