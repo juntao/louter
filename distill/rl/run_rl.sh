@@ -19,6 +19,7 @@
 #   INFERENCE_BACKEND  Rollout backend: transformers|ollama|vllm (default: transformers)
 #   OLLAMA_MODEL       Name for deployed model (default: louter-rl)
 #   MIN_EPISODES       Min episodes required to start training (default: 100)
+#   LOUTER_RL_STRICT_EVAL  Block deployment if eval fails: 1=strict (default), 0=override
 
 set -euo pipefail
 
@@ -206,9 +207,14 @@ if [ "$deploy_only" = false ]; then
             echo "RL model is better — proceeding to deploy."
         else
             echo "RL model did NOT improve over SFT baseline."
-            echo "Skipping deployment. Review: $OUTPUT_DIR/eval_report.json"
+            echo "Review: $OUTPUT_DIR/eval_report.json"
             if [ "$eval_only" = true ]; then exit 0; fi
-            echo "Deploying anyway (override). Remove this line to enforce the gate."
+            if [ "${LOUTER_RL_STRICT_EVAL:-1}" = "1" ]; then
+                echo "Evaluation gate failed. Aborting deployment (set LOUTER_RL_STRICT_EVAL=0 to override)."
+                exit 1
+            else
+                echo "WARNING: Deploying despite evaluation gate failure (LOUTER_RL_STRICT_EVAL=0)."
+            fi
         fi
     else
         echo "No episodes file for evaluation — skipping comparison."

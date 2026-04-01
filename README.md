@@ -533,7 +533,7 @@ OPD is combined with GRPO: `L_total = W_RL * L_grpo + W_OPD * L_opd`. Weights ar
 - **KL divergence cap** — Training stops early if the model drifts too far from the reference (threshold: 0.1)
 - **Reward hacking detection** — If judge scores improve but actual retry rates don't, the reward model may be exploited
 - **Automatic rollback** — Previous model kept as `louter-rl-prev` for fallback
-- **Evaluation gate** — Model is only deployed if it beats the SFT baseline on held-out prompts
+- **Evaluation gate** — Model is only deployed if it beats the SFT baseline on held-out prompts (`LOUTER_RL_STRICT_EVAL=1` by default; set to `0` to override)
 
 ### RL pipeline components
 

@@ -364,6 +364,7 @@ Environment variables:
 | `INFERENCE_BACKEND` | `transformers` | Rollout backend: `transformers`, `ollama`, `vllm` |
 | `OLLAMA_MODEL` | `louter-rl` | Ollama model name for deployment |
 | `MIN_EPISODES` | `100` | Skip training if fewer episodes available |
+| `LOUTER_RL_STRICT_EVAL` | `1` | Block deployment if eval fails (`0` to override) |
 
 Pipeline steps (full run):
 
@@ -539,7 +540,7 @@ Track success rates per task type after each RL round. Only expand when `min_loc
 All three safety mechanisms are implemented:
 
 - **KL divergence cap**: `train_grpo.py` and `train_opd.py` monitor per-step KL divergence. If average KL exceeds `--kl-cap` (default 0.1), training stops early with a warning. Prevents mode collapse.
-- **Evaluation gate**: `evaluate.py` compares RL vs SFT on held-out prompts before deployment. Exit code 1 blocks deployment if RL doesn't improve. `run_rl.sh` checks this exit code in step 4.
+- **Evaluation gate**: `evaluate.py` compares RL vs SFT on held-out prompts before deployment. Exit code 1 blocks deployment if RL doesn't improve. `run_rl.sh` enforces this by default (`LOUTER_RL_STRICT_EVAL=1`). Set `LOUTER_RL_STRICT_EVAL=0` to override during development.
 - **Rollback mechanism**: Before deploying to Ollama, `run_rl.sh` copies the existing model to `louter-rl-prev`:
   ```bash
   ollama cp louter-rl louter-rl-prev    # automatic backup

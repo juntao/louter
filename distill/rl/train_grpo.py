@@ -227,28 +227,26 @@ def train(args):
 
                 log_probs = F.log_softmax(logits, dim=-1)
                 token_log_probs = log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
-                sequence_log_prob = token_log_probs.sum()
 
-                # Reference model log-probs (for KL penalty)
+                # Reference model log-probs (for KL penalty and ratio)
                 with torch.no_grad():
                     ref_outputs = ref_model(**tokens)
                     ref_logits = ref_outputs.logits[:, prompt_len - 1:-1, :]
                     ref_log_probs = F.log_softmax(ref_logits, dim=-1)
                     ref_token_log_probs = ref_log_probs.gather(2, target_ids.unsqueeze(-1)).squeeze(-1)
-                    ref_sequence_log_prob = ref_token_log_probs.sum()
 
-                # Probability ratio (in log space)
-                log_ratio = sequence_log_prob - ref_sequence_log_prob
-                ratio = torch.exp(log_ratio)
+                # Per-token probability ratio — avoids numerical overflow/underflow
+                # that occurs when exponentiating the sum of all token log-probs
+                per_token_ratio = torch.exp(token_log_probs - ref_token_log_probs)
 
                 # KL divergence (approximate: mean per-token KL)
                 per_token_kl = (token_log_probs - ref_token_log_probs).mean()
 
-                # Clipped surrogate loss
+                # Per-token clipped surrogate loss, averaged across completion tokens
                 adv = torch.tensor(advantage, device=device, dtype=dtype)
-                surr1 = ratio * adv
-                surr2 = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
-                policy_loss = -torch.min(surr1, surr2)
+                surr1 = per_token_ratio * adv
+                surr2 = torch.clamp(per_token_ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
+                policy_loss = -torch.min(surr1, surr2).mean()
 
                 # KL penalty
                 kl_loss = kl_beta * per_token_kl
